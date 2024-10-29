@@ -125,7 +125,7 @@ localparam       USER_BUF_BITS            = 5;  // Compatibility with old softwa
 //   axis_control_data[]                          REG_WR_TXDMA_COMB
 //       [1:0] -- 11 -- FMT_16BIT; 00 -- STOP
 //       [2]      Repeat
-//       [3]      SISO
+//       [3]      Format; 0 - SISO; 1 - MIMO
 //     [6:4]      <reserved>
 //       [7]      Reset
 //       [8]      mute_b
@@ -139,12 +139,12 @@ localparam       USER_BUF_BITS            = 5;  // Compatibility with old softwa
 // |  ts[31:0]                                      |
 //
 // Old style (deprecated)
-// | 0 | nots | dw_samples[13:0]  | ts[47:0]        |     REG_WR_TXDMA_CNF_L
+// | 0 | nots | dw_samples[13:0]  | ts[47:32]       |     REG_WR_TXDMA_CNF_L
 // |  ts[31:0]                                      |     REG_WR_TXDMA_CNF_T
 
 // Old style (since 20240526)
 // S bit tell odd or even number of samles in SISO mode
-// | 0 | nots | samples[14:0]  | ts[46:0]           |     REG_WR_TXDMA_CNF_L
+// | 0 | nots | samples[14:0]  | ts[46:32]          |     REG_WR_TXDMA_CNF_L
 // |  ts[31:0]                                      |     REG_WR_TXDMA_CNF_T
 
 wire                              dma_core_ready;
@@ -196,7 +196,7 @@ always @(posedge clk) begin
         dma_tx_ready  <= 0;
     end else begin
         control_valid <= 1'b0;
-        dma_tx_ready  <= circ_core_ready && dma_core_ready /*|| tran_usb_active*/;
+        dma_tx_ready  <= !txdma_active || circ_core_ready && dma_core_ready /*|| tran_usb_active*/;
 
         if (axis_control_valid && axis_control_ready) begin
             if (txdma_active == 1'b0 && axis_control_data[1:0] == 2'b11) begin
