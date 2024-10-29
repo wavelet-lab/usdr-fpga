@@ -29,7 +29,7 @@ module rx_dsp_chain #(
     output [DSP_WIDTH * 2 - 1:0] dsp_data,
     output                       dsp_valid,
     input                        dsp_ready,
-    input                        dsp_cfg_rst,
+    // input                        dsp_cfg_rst,
     input                        dsp_cfg_valid,
     input [CFG_WIDTH-1:0]        dsp_cfg_data
 );
@@ -74,6 +74,8 @@ generate
         assign adc_dccorr_i     = adc_data_ext_i;
         assign adc_dccorr_q     = adc_data_ext_q;
         assign adc_dccorr_valid = adc_valid;
+        
+        assign adc_dc_corr_vals = {DSP_WIDTH{2'b00}};
     end
 endgenerate
 
@@ -134,7 +136,7 @@ wire                       ncoo_dspclk_ready;
 
 axis_cc_fifo #(
     .WIDTH(DSP_WIDTH * 2),
-    .DEEP_BITS(4)
+    .DEEP_BITS(5)
 ) adc_fifo_i (
     .rx_clk(adc_clk),
     .rx_rst(adc_rst),
@@ -169,7 +171,7 @@ reconf_dsp_fir #(
     .out_data(dsp_data),
     .out_ready(dsp_ready),
 
-    .cfg_rst(dsp_cfg_rst),
+   // .cfg_rst(dsp_cfg_rst),
     .cfg_valid(dsp_cfg_valid),
     .cfg_data(dsp_cfg_data)
 );

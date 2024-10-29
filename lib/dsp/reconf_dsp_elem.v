@@ -41,13 +41,13 @@ module reconf_dsp_elem #(
 	output [WIDTH_P * CHANS - 1:0] pcout_data,
 
 	// Execution / control / configuration
-	input [FIFO_PA_BITS-1:0]       exe_faa,
-	input [FIFO_PD_BITS-1:0]       exe_fad,
-	input [FIFO_PF_BITS-1:0]       exe_fac,
-	input                          exe_pa_l,
-	input                          exe_pd_l,
-	input                          exe_pc_l,
-	input                          exe_pi_r,
+	input [FIFO_PA_BITS-1:0]       exe_faa,  // Address from PA stack register file
+	input [FIFO_PD_BITS-1:0]       exe_fad,  // Address from PD stack register file
+	input [FIFO_PF_BITS-1:0]       exe_fac,  // Address from PC stack register file
+	input                          exe_pa_l, // Load din_data into PA stack register
+	input                          exe_pd_l, // Load din_data into PD stack register
+	input                          exe_pc_l, // Load din_data into PC stack register
+	input                          exe_pi_r, // Signal to consume ( put ready )
 	input                          exe_pp_l, // Push data signal to the next stage
 	input [CMD_WIDTH-1:0]          exe_cmd,
 	input                          exe_cfg_omux,
