@@ -6,6 +6,7 @@ module usdr_app_generic_us #(
     parameter SPI_WIDTH      = 32'h00_18_18_18,
     parameter SPI_DIV        = 32'h80_80_80_80,
     parameter SPI_COUNT      = 4,
+    parameter SPI_EXT_PRESENT = 0,
     parameter IGPI_COUNT     = 1,
     parameter IGPO_COUNT     = 1,
     parameter IGPO_INIT      = 0,
@@ -19,13 +20,14 @@ module usdr_app_generic_us #(
     parameter KEEP_WIDTH          = C_DATA_WIDTH / 32,
     parameter DWISBE              = 1,
     parameter EGPIO_PRESENT       = 0,
-    parameter EGPIO_WIDTH         = 14,
+    parameter EGPIO_WIDTH         = 15,
     parameter UART_PRESENT        = 0,
     parameter ULTRA_SCALE         = 1,
     parameter USB2_PRESENT        = 0,
     parameter USDR_PID            = 0,
     parameter TX_FRAME_LENGTH     = 32,
-    parameter TX_INITIAL_TS_COMP  = TX_FRAME_LENGTH
+    parameter TX_INITIAL_TS_COMP  = TX_FRAME_LENGTH,
+    parameter USE_EXT_ADC_CLK     = 0
 )(
     // high speed data interfaces
     input          hrst,
@@ -76,6 +78,7 @@ module usdr_app_generic_us #(
     output [4:0]   cfg_pciecap_interrupt_msgnum,
 
     // streaming ADC
+    input          adc_clk_ext, // External ADC clock when USE_EXT_ADC_CLK is activated
     input [63:0]   adc_realigned,
     input          adc_fifo_valid,
     output         rx_ready,
@@ -114,6 +117,11 @@ module usdr_app_generic_us #(
     input  [3:0]   spi_miso,
     output [3:0]   spi_sclk,
     output [3:0]   spi_sen,
+
+    output         spi_ext_mosi,
+    input          spi_ext_miso,
+    output         spi_ext_sclk,
+    output [7:0]   spi_ext_sen,
 
     output [3:0]   flash_dout,
     input  [3:0]   flash_din,
@@ -155,6 +163,9 @@ module usdr_app_generic_us #(
 
 localparam DATA_BITS = (C_DATA_WIDTH == 256) ? 5 : (C_DATA_WIDTH == 128) ? 4 : 3;
 wire tran_usb_active = USB2_PRESENT && usb_bus_active;
+
+wire adc_rst = (USE_EXT_ADC_CLK) ? 1'b0        : hrst;
+wire adc_clk = (USE_EXT_ADC_CLK) ? adc_clk_ext : hclk;
 
 /////////////////////////////////////
 // Register map
@@ -373,7 +384,9 @@ alrdwr_demux_addr #(.ADDR_WIDTH(AL_BUS_WIDTH), .ID_WIDTH(1), .MASTER_COUNT(2), .
 //////////////////////////////////////////////////////////////////////////////////////////////
 
 // Write ports
-localparam USER_CSR_COUNT = 32;
+localparam USER_CSR_COUNT = 64;
+localparam USER_CSR_BITS = $clog2(USER_CSR_COUNT);
+
 localparam UCSR_WR_SIZE = USER_CSR_COUNT;
 wire [31:0]              axis_csrwr_data;
 wire [UCSR_WR_SIZE-1:0]  axis_csrwr_valid;
@@ -421,65 +434,41 @@ alrd_mux_axis #(
 //////////////////////////////////////////////////////////////////////////////////////////////
 // CSR defines
 
-// RD16 -- 22 .. GPI readback
-`STATIC_ASSERT(IGPI_COUNT <= 7 * 4, igpi_count)
-wire [7 * 32 - 1:0] igpi_data_ext = igpi_data;
+// RD16 -- 28 .. GPI readback
+`STATIC_ASSERT(IGPI_COUNT <= 12 * 4, igpi_count)
+wire [12 * 32 - 1:0] igpi_data_ext = igpi_data;
 
+// CSRs [0:15]
 `CSR32_WR(REG_WR_CTRL, gpo); `CSR32_RD(REG_RD_IGPI_0, gpi);
 `CSR32_RDWR(REG_I2C,  i2c);
 `CSR32_RDWR(REG_SPI0, spi0);
-
-`DEFINE_CSR32_RDWR_PORT(egpio);
-`DEFINE_CSR32_RDWR_PORT(spi1);
-generate
-if (EGPIO_PRESENT) begin
-    `ASSIGN_CSR32_RDWR(REG_GPIO_CTRL, egpio);
-end else begin
-    `ASSIGN_CSR32_RDWR(REG_SPI1, spi1);
-end
-endgenerate
+`CSR32_RDWR(REG_GPIO_CTRL, egpio);
 
 `CSR32_WR(REG_WR_RXDMA_CNF0, rxdma_confirm);
 `CSR32_WR(REG_WR_RXDMA_CTRL0, rxdma_controlcomb);
 `CSR32_WR(REG_WR_MBUS2_ADDR, mbus2_addr);
 `CSR32_WR(REG_WR_MBUS2_DATA, mbus2_data);
-
 `CSR32_RD(REG_RD_RXDMA_BST0, rxdma_buffs);
 `CSR32_RD(REG_RD_RXDMA_BST1, rxdma_bursts);
 `CSR32_RD(REG_RD_RXDMA_STAT, rxdma_stat);
-`CSR32_RD(REG_RD_UNUSED_0,   rxfe0_pwr0);
-
+`CSR32_RD(REG_RD_RXFE_PWR0,  rxfe0_pwr0);
 
 `CSR32_WR(REG_WR_PNTFY_CFG,     pntfy_cfg);
 `CSR32_WR(REG_WR_PNTFY_ACK,     pntfy_ack);
 `CSR32_WR(REG_WR_FLASHSPI_CMD,  flashspi_cmd);
 `CSR32_WR(REG_WR_FLASHSPI_ADDR, flashspi_addr);
-
-`CSR32_RD(REG_RD_UNUSED_1,      rxfe0_pwr1);
+`CSR32_RD(REG_RD_RXFE_PWR1,     rxfe0_pwr1);
 `CSR32_RD(REG_RD_TIMEEVENT,     rxfe0_timeevent);
 `CSR32_RD(REG_RD_FLASHSPI_STAT, flashspi_stat);
 `CSR32_RD(REG_RD_FLASHSPI_DATA, flashspi_rb);
 
-`CSR32_RD(REG_RD_LBDSP, lbdsp);
-`DEFINE_CSR32_RDWR_PORT(spi2);
-`DEFINE_CSR32_RDWR_PORT(spi3);
-`DEFINE_CSR32_WR_PORT(txdma_cnf_len);
-`DEFINE_CSR32_WR_PORT(txdma_cnf_tm);
-`DEFINE_CSR32_WR_PORT(txdma_controlcomb);
-generate
-if (NO_TX) begin
-    `CSR32_WR_NULL(REG_WR_UNUSED_2);
-    `ASSIGN_CSR32_RDWR(REG_SPI2, spi2);
-    `ASSIGN_CSR32_RDWR(REG_SPI3, spi3);
-end else begin
-    `ASSIGN_CSR32_WR(REG_WR_TXDMA_CNF_L, txdma_cnf_len);
-    `ASSIGN_CSR32_WR(REG_WR_TXDMA_CNF_T, txdma_cnf_tm);      `CSR32_RD_NULL(REG_SPI2);
-    `ASSIGN_CSR32_WR(REG_WR_TXDMA_COMB, txdma_controlcomb);  `CSR32_RD_NULL(REG_SPI3);
-end
-endgenerate
-`CSR32_WR(REG_INTS, interrupts); `CSR32_RD_NULL(REG_INTS);
+`CSR32_WR(REG_WR_TXDMA_CNF_L, txdma_cnf_len);     `CSR32_RD_NULL(REG_WR_TXDMA_CNF_L);
+`CSR32_WR(REG_WR_TXDMA_CNF_T, txdma_cnf_tm);      `CSR32_RD_NULL(REG_WR_TXDMA_CNF_T);
+`CSR32_WR(REG_WR_TXDMA_COMB, txdma_controlcomb);  `CSR32_RD_NULL(REG_WR_TXDMA_COMB);
+`CSR32_WR(REG_INTS, interrupts);                  `CSR32_RD_NULL(REG_INTS);
 
-`CSR32_WR(REG_WR_LBDSP, lbdsp); `CSR32_RD_CONST(16, `SUBVECTOR(igpi_data_ext, 32, 0));
+// CSRs [16:31]
+`CSR32_WR_NULL(16); `CSR32_RD_CONST(16, `SUBVECTOR(igpi_data_ext, 32, 0));
 `CSR32_WR_NULL(17); `CSR32_RD_CONST(17, `SUBVECTOR(igpi_data_ext, 32, 1));
 `CSR32_WR_NULL(18); `CSR32_RD_CONST(18, `SUBVECTOR(igpi_data_ext, 32, 2));
 `CSR32_WR_NULL(19); `CSR32_RD_CONST(19, `SUBVECTOR(igpi_data_ext, 32, 3));
@@ -487,37 +476,61 @@ endgenerate
 `CSR32_WR_NULL(20); `CSR32_RD_CONST(20, `SUBVECTOR(igpi_data_ext, 32, 4));
 `CSR32_WR_NULL(21); `CSR32_RD_CONST(21, `SUBVECTOR(igpi_data_ext, 32, 5));
 `CSR32_WR_NULL(22); `CSR32_RD_CONST(22, `SUBVECTOR(igpi_data_ext, 32, 6));
-`CSR32_RDWR(REG_UART_TRX, uart_trx);
+`CSR32_WR_NULL(23); `CSR32_RD_CONST(23, `SUBVECTOR(igpi_data_ext, 32, 7));
 
+`CSR32_WR_NULL(24); `CSR32_RD_CONST(24, `SUBVECTOR(igpi_data_ext, 32, 8));
+`CSR32_WR_NULL(25); `CSR32_RD_CONST(25, `SUBVECTOR(igpi_data_ext, 32, 9));
+`CSR32_WR_NULL(26); `CSR32_RD_CONST(26, `SUBVECTOR(igpi_data_ext, 32, 10));
+`CSR32_WR_NULL(27); `CSR32_RD_CONST(27, `SUBVECTOR(igpi_data_ext, 32, 11));
+
+`CSR32_WR_NULL(28); `CSR32_RD(REG_RD_TXDMA_STAT, txdma_stat);
+`CSR32_WR_NULL(29); `CSR32_RD(REG_RD_TXDMA_STATM, txdma_statm);
+`CSR32_WR_NULL(30); `CSR32_RD(REG_RD_TXDMA_STATTS, txdma_statts);
+`CSR32_WR_NULL(31); `CSR32_RD(REG_RD_TXDMA_STAT_CPL, txdma_stat_cpl);
+
+// CSRs [32:47]
+`CSR32_WR_NULL(32); `CSR32_RD_NULL(32);
+`CSR32_WR_NULL(33); `CSR32_RD_NULL(33);
+`CSR32_WR_NULL(34); `CSR32_RD_NULL(34);
+`CSR32_WR_NULL(35); `CSR32_RD_NULL(35);
+
+`CSR32_WR_NULL(36); `CSR32_RD_NULL(36);
+`CSR32_WR_NULL(37); `CSR32_RD_NULL(37);
+`CSR32_WR_NULL(38); `CSR32_RD_NULL(38);
+`CSR32_WR_NULL(39); `CSR32_RD_NULL(39);
+
+`CSR32_WR_NULL(40); `CSR32_RD_NULL(40);
+`CSR32_WR_NULL(41); `CSR32_RD_NULL(41);
+`CSR32_WR_NULL(42); `CSR32_RD_NULL(42);
+`CSR32_WR_NULL(43); `CSR32_RD_NULL(43);
+
+`CSR32_WR_NULL(44); `CSR32_RD_NULL(44);
+`CSR32_WR_NULL(45); `CSR32_RD_NULL(45);
+`CSR32_WR_NULL(46); `CSR32_RD_NULL(46);
+`CSR32_WR_NULL(47); `CSR32_RD_NULL(47);
+
+// CSRs [48:63]
+`CSR32_RDWR(REG_SPI1, spi1);
+`CSR32_RDWR(REG_SPI2, spi2);
+`CSR32_RDWR(REG_SPI3, spi3);
+`CSR32_WR_NULL(51); `CSR32_RD_NULL(51);
+
+`CSR32_RDWR(REG_LBDSP, lbdsp);
+`CSR32_WR_NULL(53); `CSR32_RD_NULL(53);
+`CSR32_RDWR(REG_UART_TRX, uart_trx);
+`CSR32_WR_NULL(55); `CSR32_RD_NULL(55);
 
 `CSR32_RDWR(REG_CFG_PHY_0, cfg_phy_0);
 `CSR32_RDWR(REG_CFG_PHY_1, cfg_phy_1);
-`CSR32_WR_NULL(26); `CSR32_RD_NULL(26);
-`CSR32_WR_NULL(27); `CSR32_RD_NULL(27);
+`CSR32_WR(REG_SPI_EXT_CFG, spi_ext_cfg); `CSR32_RD_NULL(58);
+`CSR32_RDWR(REG_SPI_EXT_DATA, spi_ext);
 
-`CSR32_WR_NULL(28);
-`CSR32_WR_NULL(29);
-`CSR32_WR_NULL(30);
-`CSR32_WR_NULL(31);
+`CSR32_WR_NULL(60); `CSR32_RD_NULL(60);
+`CSR32_WR_NULL(61); `CSR32_RD_NULL(61);
+`CSR32_WR_NULL(62); `CSR32_RD_NULL(62);
+`CSR32_WR_NULL(63); `CSR32_RD_NULL(63);
 
 
-`DEFINE_CSR32_RDWR_PORT(txdma_stat);
-`DEFINE_CSR32_RDWR_PORT(txdma_statm);
-`DEFINE_CSR32_RDWR_PORT(txdma_statts);
-`DEFINE_CSR32_RDWR_PORT(txdma_stat_cpl);
-generate
-if (NO_TX) begin
-    `CSR32_RD_NULL(REG_RD_TXDMA_STAT);
-    `CSR32_RD_NULL(REG_RD_TXDMA_STATM);
-    `CSR32_RD_NULL(REG_RD_TXDMA_STATTS);
-    `CSR32_RD_NULL(REG_RD_TXDMA_STAT_CPL);
-end else begin
-    `ASSIGN_CSR32_RD(REG_RD_TXDMA_STAT, txdma_stat);
-    `ASSIGN_CSR32_RD(REG_RD_TXDMA_STATM, txdma_statm);
-    `ASSIGN_CSR32_RD(REG_RD_TXDMA_STATTS, txdma_statts);
-    `ASSIGN_CSR32_RD(REG_RD_TXDMA_STAT_CPL, txdma_stat_cpl);
-end
-endgenerate
 
 assign axis_rd_gpi_data = igpi_data_ext[31:0];
 assign axis_rd_gpi_valid = 1'b1;
@@ -529,6 +542,7 @@ assign axis_rd_gpi_valid = 1'b1;
 `DEFINE_AXIS_RV_PORT(axis_int_spi1_);
 `DEFINE_AXIS_RV_PORT(axis_int_spi2_);
 `DEFINE_AXIS_RV_PORT(axis_int_spi3_);
+`DEFINE_AXIS_RV_PORT(axis_int_spi_ext_);
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 // I2C
@@ -572,6 +586,12 @@ axis_i2c_dme_wrapper  #(
             .spi_sen(spi_sen[i]), \
             `AXIS_RV_PORT_CONN(spi_interrupt_, axis_int_spi``i``_))
 
+`INSTANCE_SPI(0);
+`INSTANCE_SPI(1);
+`INSTANCE_SPI(2);
+`INSTANCE_SPI(3);
+
+/*
 `define NO_SPI_BUS(i) \
     assign spi_sclk[i] = 1'b1; \
     assign spi_sen[i] = 1'b1; \
@@ -594,6 +614,7 @@ generate
         `NO_SPI_BUS(3);
     end
 endgenerate
+*/
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // AUX bus
@@ -703,7 +724,8 @@ assign int_valid[5] = axis_int_spi3_valid;
 assign int_valid[6] = axis_int_i2c_valid;
 assign axis_int_i2c_ready = int_ready[6];
 
-assign int_valid[7] = 0;
+assign int_valid[7] = axis_int_spi_ext_valid;
+assign axis_int_spi_ext_ready = int_ready[7];
 
 assign evntproc_ready[7:1] = ~0;
 assign evntproc_ready[0]   =  dmarx_stat_cnf_ready;
@@ -766,11 +788,11 @@ assign evd_f_ready = (!tran_usb_active) ? evd_f_pcie_ready : evd_f_usb2_ready;
 
 event_fifo_gen #(
     .EVENT_COUNT_BITS(INT_COUNT_BITS),
-    .ADDR_WIDTH(UCSR_RD_SIZE + 2),
+    .ADDR_WIDTH(USER_CSR_BITS + 2),
     .DATA_WIDTH(32),
     .AUX_WIDTH(INT_COUNT_BITS + INT_PUSH_BITS),
-    //                    none      i2c     spi3     spi2     spi1     spi0     tx0     rx0
-    .A_EVENT_ADDRS(256'h00000000_00000001_0000000E_0000000D_00000003_00000002_0000001C_00000004),
+    //                   spi_e      i2c     spi3     spi2     spi1     spi0     tx0     rx0
+    .A_EVENT_ADDRS(256'h0000003B_00000001_0000000E_0000000D_00000003_00000002_0000001C_00000004),
     .A_EVENT_LEN(  256'h00000000_00000000_00000000_00000000_00000000_00000000_00000002_00000002)
 ) event_fifo_gen (
     .clk(pclk),
@@ -918,8 +940,8 @@ blk_mem_gen_nrx fifo_mem_rx (
     .dina(rxdma_bram_data_wr),
     .douta(rxdma_bram_data_rd),
 
-    .clkb(hclk),
-    .rstb(hrst),
+    .clkb(adc_clk),
+    .rstb(adc_rst),
     .enb(fe_rxdma_ten),
     .web(fe_rxdma_twbe),
     .addrb(fe_rxdma_taddr),
@@ -1039,24 +1061,27 @@ wire                     rx_timer_en;
 assign axis_rd_rxfe0_timeevent_valid = 1'b1;
 assign axis_rd_rxfe0_pwr0_valid = 1'b1;
 assign axis_rd_rxfe0_pwr1_valid = 1'b1;
+assign axis_rd_rxfe0_timeevent_data = 0;
+assign axis_rd_rxfe0_pwr0_data = 0;
+assign axis_rd_rxfe0_pwr1_data = 0;
 
-reg [1:0] cfg_max_payload_sz;
-always @(posedge hclk) begin
-  if (hrst) begin
-    cfg_max_payload_sz <= 2'b0;
-  end else begin
-    cfg_max_payload_sz <= tran_usb_active ? 2'b10 : cfg_max_payload_size[1:0];
-  end
+reg [1:0] cfg_max_payload_sz_adc_clk;
+always @(posedge adc_clk) begin
+  //if (adc_rst) begin
+    //cfg_max_payload_sz_adc_clk <= 2'b0;
+  //end else begin
+    cfg_max_payload_sz_adc_clk <= tran_usb_active ? 2'b10 : cfg_max_payload_size[1:0];
+  //end
 end
 //
 
 fe_simple_rx #(
     .BUFFER_SIZE_ADDR(RAM_RX_ADDR_W),
     .DATA_WIDTH(16),
-    .ASYNC_BURST_CLOCK(HUL_BUS_SPEED != PUL_BUS_SPEED)
+    .ASYNC_BURST_CLOCK((HUL_BUS_SPEED != PUL_BUS_SPEED) || USE_EXT_ADC_CLK)
 ) fe_simple_rx (
-    .clk(hclk),
-    .rst(hrst),
+    .clk(adc_clk),
+    .rst(adc_rst),
 
     .s_in_data(adc_realigned),
     .s_in_valid(adc_fifo_valid),
@@ -1074,7 +1099,7 @@ fe_simple_rx #(
     .m_rxfe_tlast(),
 
     // For USB use 512b for BULK EP
-    .cfg_mlowmrk(cfg_max_payload_sz),
+    .cfg_mlowmrk(cfg_max_payload_sz_adc_clk),
 
     // FIFO control
     .fifo_burst_clk(pclk),
@@ -1190,9 +1215,34 @@ assign rx_timer_en = 1'b1; //TODO
 
 assign dmatx_interrupt_valid = 1'b0;
 
+assign m_axis_rc_tready = 1'b1;
+
+assign hclk_axis_rq_txdma_tdata = 0;
+assign hclk_axis_rq_txdma_tkeep = 0;
+assign hclk_axis_rq_txdma_tlast = 0;
 assign hclk_axis_rq_txdma_tvalid = 1'b0;
 
 assign txdma_nactive = 1'b1;
+
+assign m_axis_rc_tready = 1'b1;
+
+assign m3_al_wready = 1'b1;
+
+assign sysref_gen = 1'b0;
+
+assign axis_wr_txdma_cnf_len_ready = 1'b1;
+assign axis_wr_txdma_cnf_tm_ready = 1'b1;
+assign axis_wr_txdma_controlcomb_ready = 1'b1;
+
+assign axis_rd_txdma_stat_valid = 1'b1;
+assign axis_rd_txdma_statm_valid = 1'b1;
+assign axis_rd_txdma_statts_valid = 1'b1;
+assign axis_rd_txdma_stat_cpl_valid = 1'b1;
+
+assign axis_rd_txdma_stat_data = 0;
+assign axis_rd_txdma_statm_data = 0;
+assign axis_rd_txdma_statts_data = 0;
+assign axis_rd_txdma_stat_cpl_data = 0;
 
 end else begin
 
@@ -1326,14 +1376,14 @@ wire                                 tx_timer_en;
 
 assign                               tx_streaming = !dac_rst;
 
-synchronizer #(.ASYNC_RESET(1), .INIT(1)) tx_dmaen_to_dacclk_rst (
+synchronizer #( /*.ASYNC_RESET(1),*/ .INIT(1)) tx_dmaen_to_dacclk_rst (
   .clk(dac_clk),
   .rst(prst /*1'b0*/),
   .a_in(txdma_nactive),
   .s_out(dac_rst)
 );
 
-synchronizer #(.ASYNC_RESET(1), .INIT(0)) tx_timer_to_dacclk_sync (
+synchronizer #(/*.ASYNC_RESET(1),*/ .INIT(0)) tx_timer_to_dacclk_sync (
   .clk(dac_clk),
   .rst(dac_rst),
   .a_in(tx_timer_en),
@@ -1358,8 +1408,8 @@ assign tx_fifo_rdata  = fe_txdma_tdata_rd_ext;
 
 cc_counter #(
    .WIDTH(TX_STAT_FE_WIDTH),
-   .GRAY_BITS(6),
-   .ASYNC_RESET(1)
+   .GRAY_BITS(6) /*,
+   .ASYNC_RESET(1)*/
 ) cc_tx_timer (
    .in_clk(dac_clk),
    .in_rst(dac_rst),
@@ -1682,6 +1732,11 @@ end else begin
     assign axis_wr_egpio_ready = 1'b1;
     assign axis_rd_egpio_data = 0;
     assign axis_rd_egpio_valid = 1'b1;
+
+    assign egpio_data_oe  = {EGPIO_WIDTH{1'b0}};
+    assign egpio_data_out = {EGPIO_WIDTH{1'b0}};
+    assign egpio_alt0_in  = {EGPIO_WIDTH{1'b1}};
+    assign egpio_altf0_active = {EGPIO_WIDTH{1'b1}};
 end
 endgenerate
 
@@ -1774,6 +1829,9 @@ if (USB2_PRESENT) begin: usb2_present
 
 end else begin
     assign uul_wvalid = 1'b0;
+    assign uul_waddr = 0;
+    assign uul_wdata = 0;
+
     assign uul_arvalid = 1'b0;
     assign uul_rready = 1'b1;
 
@@ -1834,6 +1892,39 @@ end else begin
     assign axis_rd_uart_trx_data  = 32'h0;
     assign axis_rd_uart_trx_valid = 1'b1;
     assign axis_wr_uart_trx_ready = 1'b1;
+
+    assign uart_txd = 1'b1; // IDLE state
+end
+endgenerate
+
+generate
+if (SPI_EXT_PRESENT) begin
+    axis_spi_ext_wrapper  #(
+        .DATA_WIDTH(32),
+        .CS_COUNT(8)
+    ) spi_ext_inst (
+        .clk(pclk),
+        .rst(prst),
+        `AXIS_RVD_PORT_CONN(axis_cfg_, axis_wr_spi_ext_cfg_),
+        `AXIS_RVD_PORT_CONN(axis_tx_, axis_wr_spi_ext_),
+        `AXIS_RVD_PORT_CONN(axis_rx_, axis_rd_spi_ext_),
+        .spi_mosi(spi_ext_mosi),
+        .spi_miso(spi_ext_miso),
+        .spi_sclk(spi_ext_sclk),
+        .spi_sen(spi_ext_sen),
+        `AXIS_RV_PORT_CONN(spi_interrupt_, axis_int_spi_ext_)
+    );
+end else begin
+    assign spi_ext_mosi = 1'b1;
+    assign spi_ext_sclk = 1'b1;
+    assign spi_ext_sen = 8'hff;
+
+    assign axis_wr_spi_ext_cfg_ready = 1'b1;
+    assign axis_wr_spi_ext_ready = 1'b1;
+    assign axis_rd_spi_ext_valid = 1'b1;
+    assign axis_rd_spi_ext_data = 0;
+
+    assign axis_int_spi_ext_valid = 1'b0;
 end
 endgenerate
 
