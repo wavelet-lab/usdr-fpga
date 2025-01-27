@@ -63,7 +63,7 @@ module dma_rxrq_us #(
     output reg [BUFFER_SIZE_BITS - 1:DATA_BITS]      m_tcq_laddr,
     output reg [REMOTE_ADDR_WIDTH - 1:DATA_BITS]     m_tcq_raddr,
     output reg [BUFFER_BURST_BITS - 1 + 3:DATA_BITS] m_tcq_length,
-    output reg [MEM_TAG-1:0]                         m_tcq_tag,
+    output     [MEM_TAG-1:0]                         m_tcq_tag,
 
     input                                            m_tcq_cvalid,
     output                                           m_tcq_cready,
@@ -130,7 +130,7 @@ wire [BUFFER_SIZE_BITS:DATA_BITS]        tbuffer_data;
 wire                                     tburst_valid;
 wire                                     tburst_last;
 wire [MAX_BUFF_SKIP_BITS+MAX_BUSRTS-1:0] tburst_data;
-    
+
 bsig_to_burstbuffer #(
   .MAX_BUSRTS_BITS(MAX_BUSRTS_BITS),
   .BUFFER_SIZE_BITS(BUFFER_SIZE_BITS),
@@ -213,6 +213,7 @@ ram_sxp #(.DATA_WIDTH(BUFFER_SIZE_BITS+2-DATA_BITS), .ADDR_WIDTH(DMA_BUF_BITS), 
     .rdata({full_buffer_finished, full_buffer_filled_z})
 );
 
+
 reg  [BUFFER_SIZE_BITS:DATA_BITS] dma_buffer_req_sent;
 wire [BUFFER_SIZE_BITS:DATA_BITS] dma_buffer_cts_z = full_buffer_filled_z - dma_buffer_req_sent;
 
@@ -228,7 +229,7 @@ wire [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] pcie_reqsize_z = (pcie_maxpay
 
 // Buffer is finished and we have ` <= mlowmrk_size_ext_z ` in buffer
 wire                      pcie_last_buff_transfer = full_buffer_finished && (~pcie_maxpayload_avail || pcie_buff_2 == 0);
-wire                      pcie_transfer_avail     = pcie_maxpayload_avail || pcie_last_buff_transfer;
+wire                      pcie_transfer_avail     = (pcie_maxpayload_avail || pcie_last_buff_transfer) && ~dma_buffer_cts_z[BUFFER_SIZE_BITS];
 wire                      pcie_transfer_done      = full_buffer_finished && dma_buffer_cts_z[BUFFER_SIZE_BITS];
 
 assign axis_fburts_valid = 1'b1;
@@ -249,24 +250,17 @@ ram_sxp #(.DATA_WIDTH(1+MAX_BUSRTS+MAX_BUFF_SKIP_BITS), .ADDR_WIDTH(DMA_BUF_BITS
 // Report number of available buffers to read, so we can rely only on this register
 assign axis_fbuffs_data[31:24] = { st_buffer_full, {(6-DMA_BUF_BITS){1'b1}},  dma_host_avail_cnf };
 
-reg [1:0]  req_tag_valid;
-reg [1:0]  req_trans_last;
 
-wire [1:0] tag_id =
-  (~req_tag_valid[0]) ? 2'b00 :
-  (~req_tag_valid[1]) ? 2'b01 : 2'b10;
-wire [0:0] tag_idx = tag_id[0];
-wire tag_avaliable = ~tag_id[1];
-
-reg [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] dma_req_len_0;
-reg [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] dma_req_len_1;
-wire [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] dma_req_len = (m_tcq_ctag[0]) ? dma_req_len_1 : dma_req_len_0;
-
+reg  req_tag_valid;
+reg  req_trans_last;
+wire tag_avaliable = !req_tag_valid;
+reg [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] dma_req_len;
 
 assign m_tcq_cready = 1'b1;
+reg noop_send;
 
-wire transfer_buf_end = m_tcq_cvalid && m_tcq_cready && req_trans_last[m_tcq_ctag[0]];
-assign dma_next_buf   = m_tcq_valid && m_tcq_ready && req_trans_last[m_tcq_tag[0]];
+wire transfer_buf_end = m_tcq_cvalid && m_tcq_cready && req_trans_last || noop_send;
+assign dma_next_buf   = m_tcq_valid && m_tcq_ready && req_trans_last || noop_send;
 
 localparam INT_COUNTER_WIDTH = 3;
 reg [INT_COUNTER_WIDTH - 1:0] outstanding_interrupts;
@@ -327,17 +321,22 @@ wire start_rx               = axis_control_valid && axis_control_data[0] && ~axi
 wire stop_rx                = axis_control_valid && ~axis_control_data[0] && ~axis_control_data[2];
 
 wire      dma_cycle_valid   = 1'b1;
-reg [1:0] req_tag_dummy;
+reg       req_tag_dummy;
 reg       m_tcq_dma_done;
+
+wire      mem_wr_event = ~inplace_cnf_valid && ~m_tcq_valid && dma_buff_avail && (pcie_transfer_avail || pcie_transfer_done) && ~full_buffer_filled_z_reset && tag_avaliable && stat_cycle_valid && dma_cycle_valid;
+
 
 // DMA control and PCIe data movement process
 always @(posedge clk) begin
   if (rst) begin
     dma_en                       <= 1'b0;
     m_tcq_valid                  <= 1'b0;
-    req_tag_valid                <= 2'b00;
-    req_tag_dummy                <= 2'b00;
+    req_tag_valid                <= 1'b0;
+    req_tag_dummy                <= 1'b0;
     rx_streamingready            <= 1'b0;
+    noop_send                    <= 1'b0;
+
   end else begin
 
     // virtual DMA_UPDATE_COUNTERS state
@@ -349,15 +348,15 @@ always @(posedge clk) begin
         dma_buffer_req_sent  <= dma_buffer_req_sent + m_tcq_length + 1'b1;
       end
 
-      if (req_trans_last[m_tcq_tag]) begin
+      if (req_trans_last) begin
         dma_buffer_req_sent<= 0;
       end
     end
 
     if (m_tcq_cvalid && m_tcq_cready) begin
-      req_tag_valid[m_tcq_ctag[0]] <= 1'b0;
-      if (!req_tag_dummy[m_tcq_ctag[0]]) begin
-      dma_transferred              <= dma_transferred + dma_req_len + 1'b1;
+      req_tag_valid <= 1'b0;
+      if (!req_tag_dummy) begin
+        dma_transferred              <= dma_transferred + dma_req_len + 1'b1;
       end
     end
 
@@ -373,13 +372,12 @@ always @(posedge clk) begin
       m_tcq_laddr         <= 0;
       dma_buffer_req_sent <= 0;
       dma_transferred     <= 0;
-      req_tag_valid       <= 2'b00;
+      req_tag_valid       <= 2'b0;
       inplace_cnf_valid   <= 1'b0;
 
       if (start_rx) begin
         dma_en            <= 1'b1;
         req_trans_last    <= 2'b01;
-        m_tcq_tag         <= 0;
       end
 
       rx_streamingready   <= 1'b0;
@@ -388,31 +386,36 @@ always @(posedge clk) begin
         inplace_cnf_valid <= 1'b0;
       end
 
-      if (~inplace_cnf_valid && ~m_tcq_valid && dma_buff_avail && (pcie_transfer_avail || pcie_transfer_done) && ~full_buffer_filled_z_reset && tag_avaliable && stat_cycle_valid && dma_cycle_valid) begin
-        if (tag_idx) begin
-          dma_req_len_1         <= pcie_reqsize_z;
-          req_tag_dummy[1]      <= pcie_transfer_done;
+      noop_send <= 1'b0;
+
+      if (mem_wr_event) begin
+        if (pcie_transfer_avail) begin
+            dma_req_len        <= pcie_reqsize_z;
+            req_tag_dummy      <= pcie_transfer_done;
+
+            if (req_trans_last) begin
+                m_tcq_raddr           <= { dma_raddr[REMOTE_ADDR_WIDTH - 1:12], {(12 - DATA_BITS){1'b0}} };
+            end
+
+            m_tcq_length            <= pcie_reqsize_z;
+            m_tcq_valid             <= 1'b1;
+            m_tcq_dma_done          <= pcie_transfer_done;
+
+            req_tag_valid           <= 1'b1;
+            req_trans_last          <= pcie_last_buff_transfer || pcie_transfer_done;
         end else begin
-          dma_req_len_0         <= pcie_reqsize_z;
-          req_tag_dummy[0]      <= pcie_transfer_done;
+            noop_send               <= 1'b1;
+            dma_buffer_req_sent     <= 0;
         end
-        if (req_trans_last[m_tcq_tag]) begin
-          m_tcq_raddr           <= { dma_raddr[REMOTE_ADDR_WIDTH - 1:12], {(12 - DATA_BITS){1'b0}} };
-        end
-        m_tcq_length            <= pcie_reqsize_z;
-        m_tcq_valid             <= 1'b1;
-        m_tcq_tag               <= tag_idx;
-        m_tcq_dma_done          <= pcie_transfer_done;
 
         inplace_cnf_valid       <= (pcie_last_buff_transfer || pcie_transfer_done) && inplace_cnf_enabled;
-
-        req_tag_valid[tag_idx]  <= 1'b1;
-        req_trans_last[tag_idx] <= pcie_last_buff_transfer || pcie_transfer_done;
       end
     end
 
   end
 end
+
+assign m_tcq_tag = 0;
 
 assign axis_stat_valid                    = 1'b1;
 assign axis_stat_data[DMA_BUF_BITS:0]     = dbno_confirmed;
