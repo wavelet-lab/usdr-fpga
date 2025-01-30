@@ -110,11 +110,11 @@ end else if (CLK_CC) begin
     end
 
 end else begin
-    assign tx_tdata    = s_rx_tdata;
-    assign tx_tvalid   = s_rx_tvalid;
     if (!NO_DATA) begin
-        assign s_rx_tready = tx_tready;
+        assign tx_tdata    = s_rx_tdata;
     end
+    assign tx_tvalid   = s_rx_tvalid;
+    assign s_rx_tready = tx_tready;
 end
 endgenerate
 
