@@ -35,6 +35,7 @@ module al_ram_to_pcie_memwr #(
     input [15:0]                               cfg_pcie_reqid,
     input [1:0]                                cfg_pcie_attr,
     input [5:0]                                pcie7s_tx_buf_av,
+    input                                      pcieus_tx_busy,
 
     // AXIs PCIe TX/RQ
     input                                      m_axis_tx_tready,
@@ -56,7 +57,7 @@ module al_ram_to_pcie_memwr #(
     input                                      m_al_rid
 );
 
-wire can_send_fc = (ULTRA_SCALE) ? 1'b1 : !TX_BUF_CTRL || (pcie7s_tx_buf_av > 3);
+wire can_send_fc = (ULTRA_SCALE) ? !TX_BUF_CTRL || !pcieus_tx_busy : !TX_BUF_CTRL || (pcie7s_tx_buf_av > 3);
 
 wire [DATA_WIDTH_:0] data_to_pcie;
 generate
