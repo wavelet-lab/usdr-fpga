@@ -60,7 +60,7 @@ localparam REG_RD_TXDMA_STAT_CPL = 31;
 localparam REG_SPI1              = 48;
 localparam REG_SPI2              = 49;
 localparam REG_SPI3              = 50;
-//localparam REG_SPI4              = 51;
+
  
 localparam REG_LBDSP             = 52;
 localparam REG_UART_TRX          = 54;
@@ -70,3 +70,6 @@ localparam REG_CFG_PHY_1         = 57;
 
 localparam REG_SPI_EXT_CFG       = 58;
 localparam REG_SPI_EXT_DATA      = 59;
+
+localparam REG_I2C2_CFG          = 60;
+localparam REG_I2C2              = 61;
