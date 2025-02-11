@@ -18,7 +18,7 @@ module fe_simple_tx #(
     parameter ID_WIDTH = 1 + SAMPLES_CHECK_BITS,
     parameter EXACT_SAMPLES_CHECK = 1,
     parameter INITIAL_TS_COMP = FRAME_LENGTH,
-    parameter ASYNC_CLK = 1,
+    parameter ASYNC_CLK = 1,  // clk & m_fedma_clk are async to each other
     parameter WITH_NOTS_BIT = 1
 )(
     input clk,
@@ -69,7 +69,6 @@ module fe_simple_tx #(
 localparam [TIMESTAMP_BITS-1:0] timestamp_advance = INITIAL_TS_COMP + 4;
 
 // TX timer control
-wire                          dac_nsync_fedma_clk;
 wire  [TIMESTAMP_BITS-1:0]    tx_timer;
 assign                        dac_frame = tx_timer[$clog2(FRAME_LENGTH)];
 
@@ -87,25 +86,47 @@ axis_opt_cc_fifo #(.CLK_CC(ASYNC_CLK), .DEEP(8), .NO_DATA(1'b1)) proc_idx_cc (
   .m_tx_tready(m_proc_idx_ready)
 );
 
-
-cc_counter #(
-   .WIDTH(TIMESTAMP_BITS),
-   .GRAY_BITS(6),
-   .ASYNC_RESET(1)
-) cc_tx_timer (
-   .in_clk(clk),
-   .in_rst(!dac_sync),
-   .in_increment( dac_valid && dac_ready ),
-   .in_counter(tx_timer),
-
-   .out_clk(m_fedma_clk),
-   .out_rst(dac_nsync_fedma_clk),
-   .out_counter(m_fedma_ts)
-);
-synchronizer #( .INIT(1), .ASYNC_RESET(1) ) dac_sync_dma_cc (.clk(m_fedma_clk), .rst(1'b0), .a_in(!dac_sync), .s_out(dac_nsync_fedma_clk));
-
 wire ram_addr_rst;
-synchronizer  dma_addr_rst_cc (.clk(m_fedma_clk), .rst(1'b0), .a_in(m_fedma_rst), .s_out(ram_addr_rst));
+
+generate
+if (ASYNC_CLK) begin
+    wire dac_nsync_fedma_clk;
+
+    cc_counter #(
+        .WIDTH(TIMESTAMP_BITS),
+        .GRAY_BITS(6) /*,
+        .ASYNC_RESET(1) */
+    ) cc_tx_timer (
+        .in_clk(clk),
+        .in_rst(!dac_sync),
+        .in_increment( dac_valid && dac_ready ),
+        .in_counter(tx_timer),
+
+        .out_clk(m_fedma_clk),
+        .out_rst(dac_nsync_fedma_clk),
+        .out_counter(m_fedma_ts)
+    );
+
+    synchronizer #( .INIT(1) /*, .ASYNC_RESET(1) */ ) dac_sync_dma_cc (.clk(m_fedma_clk), .rst(1'b0), .a_in(!dac_sync), .s_out(dac_nsync_fedma_clk));
+    synchronizer  dma_addr_rst_cc (.clk(m_fedma_clk), .rst(1'b0), .a_in(m_fedma_rst), .s_out(ram_addr_rst));
+end else begin
+    assign ram_addr_rst = m_fedma_rst;
+
+    reg [TIMESTAMP_BITS-1:0] sync_tx_timer_reg;
+    always @(posedge clk) begin
+        if (!dac_sync) begin
+            sync_tx_timer_reg <= 0;
+        end else begin
+            if (dac_valid && dac_ready) begin
+                sync_tx_timer_reg <= sync_tx_timer_reg + 1'b1;
+            end
+        end
+    end
+
+    assign tx_timer   = sync_tx_timer_reg;
+    assign m_fedma_ts = sync_tx_timer_reg;
+end
+endgenerate
 
 reg [RAM_ADDR_WIDTH:DATA_BITS]       m_fifo_araddr_e;
 reg [RAM_ADDR_WIDTH:RAM_CHECK_BIT]   m_fifo_araddr_ep;
@@ -128,7 +149,7 @@ wire [RAM_ADDR_WIDTH:RAM_CHECK_BIT] fedma_ram_addr_data;
 wire                                fedma_ram_addr_ready = 1'b1;
 wire                                fedma_ram_addr_valid;
 assign                              m_fedma_ram_addr = fedma_ram_addr_r;
-axis_opt_cc_fifo #( .CLK_CC(1), .CC_DATA_PIPELINED(0), .WIDTH(RAM_ADDR_WIDTH - RAM_CHECK_BIT + 1)) addr_check_c (
+axis_opt_cc_fifo #( .CLK_CC(ASYNC_CLK), .CC_DATA_PIPELINED(0), .WIDTH(RAM_ADDR_WIDTH - RAM_CHECK_BIT + 1)) addr_check_c (
     .rx_clk(clk),
     .rx_rst(ram_addr_rst),
 
@@ -163,12 +184,15 @@ localparam FE_TS_OFF      = FE_SAMPLES_OFF  + SAMPLES_WIDTH;
 wire [TIMESTAMP_BITS-1:0]         descriptor_data_ts      = s_descr_data[FE_DESCR_WIDTH - 1:FE_TS_OFF];
 wire [SAMPLES_WIDTH-1:0]          descriptor_data_samples = s_descr_data[FE_TS_OFF - 1     :FE_SAMPLES_OFF];
 wire [RAM_ADDR_WIDTH-1:DATA_BITS] descriptor_data_bytes   = s_descr_data[FE_SAMPLES_OFF - 1:FE_BYTES_OFF];
-wire                              descriptor_valid        = s_descr_valid;
+
+reg                               descriptor_data_ts_reg_v;
+wire                              descriptor_valid        = descriptor_data_ts_reg_v; //s_descr_valid;
 
 reg                   state;
 localparam [0:0]
     WAIT_TS  = 0,
     IN_BURST = 1;
+
 
 reg [TIMESTAMP_BITS-1:0] descriptor_data_ts_reg;
 wire [TIMESTAMP_BITS:0] timestamp_diff     = (descriptor_data_ts_reg - timestamp_advance) - tx_timer;
@@ -177,7 +201,7 @@ reg                     time_check_valid;
 reg                     time_check_prev;
 wire                    time_notset        = WITH_NOTS_BIT && descriptor_data_ts_reg[TIMESTAMP_BITS-1];
 wire                    time_check_late    = !time_notset && time_check_valid && (time_check_prev && time_check);
-wire                    time_check_trigger = time_check_valid && (!time_check_prev && time_check || time_notset && dac_valid);
+wire                    time_check_trigger = time_check_valid && (!time_check_prev && time_check || time_notset && dac_valid && dac_ready);
 
 localparam DLY_CYCLES = 2;
 reg [DLY_CYCLES-1:0]    time_check_trigger_pp;
@@ -248,8 +272,12 @@ always @(posedge clk) begin
         data_state         <= 0;
         data_samples       <= 0;
 
+        dac_valid          <= 1'b0; //
 
         m_fifo_araddr_e    <= 0;
+
+        descriptor_data_ts_reg_v <= 1'b0;
+
     end else begin
         underrung_sig      <= 1'b0;
 
@@ -257,10 +285,15 @@ always @(posedge clk) begin
             m_proc_idx_valid_clk <= 1'b0;
         end
 
+        if (s_descr_valid && !descriptor_valid) begin
+            descriptor_data_ts_reg   <= descriptor_data_ts;
+            descriptor_data_ts_reg_v <= 1'b1;
+        end
+
         if (descriptor_valid) begin ///////////////////////////////////////////////
-            time_check_prev    <= time_check;
-            time_check_valid   <= 1'b1;
-            descriptor_data_ts_reg <= descriptor_data_ts;
+            time_check_prev        <= time_check;
+            time_check_valid       <= 1'b1;
+            //descriptor_data_ts_reg <= descriptor_data_ts;
         end
 
 
@@ -279,6 +312,8 @@ always @(posedge clk) begin
         end
 
         if (descriptor_valid && descriptor_ready) begin
+            descriptor_data_ts_reg_v <= 1'b0;
+
             time_check_valid   <= 1'b0;
             underrung_sig      <= time_check_late;
 
@@ -310,10 +345,7 @@ always @(posedge clk) begin
                     if (DATA_BITS == 3 && data_state == 1)
                         data_state <= 0;
 
-                    dac_data[31:0] <= data_dfci16_1;
-                    if (DATA_WIDTH > 32) begin
-                        dac_data[DATA_WIDTH-1:32] <= data_dfci16_1;
-                    end
+                    dac_data <= {(DATA_WIDTH / 32){data_dfci16_1}};
                 end
 
                 DF_CI16_2: begin
@@ -336,7 +368,9 @@ always @(posedge clk) begin
                 end
             end
         end else begin
-            dac_data    <= 0;
+            if (dac_ready) begin
+                dac_data    <= 0;
+            end
         end
 
         if (cfg_mute[0]) begin
