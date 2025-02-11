@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: CERN-OHL-P
 //
-// Copyright 2022-2024 Wavelet Lab
+// Copyright 2022-2025 Wavelet Lab
 //
 //
 module reconf_dsp_elem #(
@@ -17,7 +17,10 @@ module reconf_dsp_elem #(
 	parameter CMD_WIDTH = 3,
 	parameter FIFO_PIPELINE = 1,
 	parameter C_PIPELINE = 1,
-	parameter DSP_ID = 1
+	parameter DSP_ID = 1,
+	parameter EXT_STALL = 0,
+	parameter BACKPRESSURE = 0,
+	parameter LAST = 0
 )(
 	input rst,
 	input clk,
@@ -28,8 +31,8 @@ module reconf_dsp_elem #(
 	output                             din_ready,
 
 	// Data stream output
-	output reg [OWIDTH * CHANS - 1:0]  dout_data,
-	output reg                         dout_valid,
+	output  [OWIDTH * CHANS - 1:0]     dout_data,
+	output                             dout_valid,
 	input                              dout_ready,
 
 	// Const / Data stream
@@ -52,7 +55,12 @@ module reconf_dsp_elem #(
 	input [CMD_WIDTH-1:0]          exe_cmd,
 	input                          exe_cfg_omux,
 
-	output reg                     alarm_ovf
+	input                          exe_cin_ready,
+	output                         exe_cout_ready,
+
+    output                         exe_ready, // 1 -- means command accepted and PC need to be updated
+
+	output                         alarm_ovf
 );
 
 // Overall pipeline stages
@@ -89,12 +97,10 @@ localparam [(1 << CMD_WIDTH_EX) - 1 : 0]      DSP_LOAD_AD  = {       1'b0,      
 
 
 // Wait for data to be availble
-wire pipe_stall_n = ~exe_pi_r || din_valid;
+wire wait_data_n  = exe_ready;
 wire pa_we        = exe_pa_l;
 wire pd_we        = exe_pd_l;
 wire pf_we        = exe_pc_l;
-
-assign din_ready  = exe_pi_r;
 
 //
 // pa
@@ -128,12 +134,12 @@ wire [FIFO_PF_BITS-1:0] pf_addr = exe_fac;
 wire [CMD_WIDTH_EX - 1:0] exe_cmd_ex = (CMD_WIDTH >= CMD_WIDTH_EX) ? exe_cmd : (exe_cmd != 3 || ~pf_addr[0] ? {1'b0, exe_cmd } : 4);
 reg [CMD_WIDTH_EX - 1:0]  dsp_cmd_s0;
 always @(posedge clk) begin
-  if (pipe_stall_n) begin
+  if (wait_data_n) begin
   	dsp_cmd_s0 <= exe_cmd_ex;
   end
 end
 wire [CMD_WIDTH_EX - 1:0]   dsp_cmd_raw = (FIFO_PIPELINE) ? dsp_cmd_s0 : exe_cmd_ex;
-wire [14:0]              dsp_cmd;
+wire [14:0]                 dsp_cmd;
 
 genvar i;
 generate
@@ -143,49 +149,56 @@ end
 endgenerate
 
 localparam LOAD_NCOND = 1'b0;
-wire ce_pad = pipe_stall_n && (LOAD_NCOND || DSP_LOAD_AD[exe_cmd_ex]);
-wire ca_pac = pipe_stall_n && (LOAD_NCOND || DSP_LOAD_C[exe_cmd_ex]);
+wire ce_pad = wait_data_n && (LOAD_NCOND || DSP_LOAD_AD[exe_cmd_ex]);
+wire ca_pac = wait_data_n && (LOAD_NCOND || DSP_LOAD_C[exe_cmd_ex]);
 
 srl_ra #(.WIDTH(CHANS*WIDTH), .DEEP(FIFO_PA)) in_pa (
-	.clk(clk), .we(pipe_stall_n && pa_we), .data_i(din_data),
+	.clk(clk), .we(wait_data_n && pa_we), .data_i(din_data),
 	.addr_i(pa_addr), .data_o(pa_data_f), .ce(ce_pad), .rstq(1'b0), .dataq_o(pa_data_q), .datasrl_o()
 );
 
 srl_ra #(.WIDTH(CHANS*WIDTH), .DEEP(FIFO_PD)) in_pd (
-	.clk(clk), .we(pipe_stall_n && pd_we), .data_i(din_data),
+	.clk(clk), .we(wait_data_n && pd_we), .data_i(din_data),
 	.addr_i(pd_addr), .data_o(pd_data_f), .ce(ce_pad), .rstq(1'b0), .dataq_o(pd_data_q), .datasrl_o()
 );
 
+
+wire [WIDTH * CHANS - 1:0]   pc_data;
+wire [4 * CHANS - 1:0]       dsp_p_svalid;
+generate
+if (DSP_C_P) begin
 srl_ra #(.WIDTH(CHANS*WIDTH), .DEEP(FIFO_PF)) in_pf (
-	.clk(clk), .we(pipe_stall_n && pf_we), .data_i(din_data),
+	.clk(clk), .we(wait_data_n && pf_we), .data_i(din_data),
 	.addr_i(pf_addr), .data_o(pf_data_f), .ce(ca_pac), .rstq(1'b0), .dataq_o(pf_data_q), .datasrl_o()
 );
 
-
 reg [WIDTH * CHANS - 1:0]   pc_data_s0;
 always @(posedge clk) begin
-  if (pipe_stall_n) begin
+  if (wait_data_n) begin
   	pc_data_s0 <= pf_data;
   end
 end
 wire [WIDTH * CHANS - 1:0]  pc_data_l = (C_PIPELINE) ? pc_data_s0 : pf_data;
 
-
 reg [WIDTH * CHANS - 1:0]   pc_data_d0;
 reg [WIDTH * CHANS - 1:0]   pc_data_d1;
-wire [4 * CHANS - 1:0]      dsp_p_svalid;
 always @(posedge clk) begin
+  if (wait_data_n) begin
 	if (dsp_p_svalid[0])
   		pc_data_d0 <= pf_data;
   	if (dsp_p_svalid[1])
   		pc_data_d1 <= pc_data_d0;
+  end
 end
-wire [WIDTH * CHANS - 1:0]   pc_data = (C_PIPELINE_NOE2) ? pc_data_l : pc_data_d1;
-
+assign pc_data = (C_PIPELINE_NOE2) ? pc_data_l : pc_data_d1;
+end else begin
+    assign pc_data      = {(WIDTH * CHANS){1'b1}};
+end
+endgenerate
 
 reg [WIDTH_B * CHANS - 1:0]   pb_data_s0;
 always @(posedge clk) begin
-  if (pipe_stall_n) begin
+  if (wait_data_n) begin
   	pb_data_s0 <= dbin_data;
   end
 end
@@ -197,7 +210,7 @@ reg  data_valid_strobe;
 always @(posedge clk) begin
   if (rst) begin
   	data_valid_strobe <= 0;
-  end else if (pipe_stall_n) begin
+  end else if (wait_data_n) begin
   	data_valid_strobe <= exe_pp_l;
   end
 end
@@ -212,6 +225,7 @@ localparam DSP_WIDTH_PP = 48;
 
 wire [CHANS-1:0] dsp_ovalid_data;
 wire [CHANS-1:0] dsp_out_tag;
+wire [CHANS-1:0] dsp_ovt;
 
 genvar ch;
 generate
@@ -239,12 +253,14 @@ wire [DSP_WIDTH_PP-1:0] dsp_out_data;
 //   tmp_p  <= pcin/c/m
 
 
-dsp48e1_pipeline #(.ID(DSP_ID)) dsp(
+dsp48e1_pipeline #(.ID(DSP_ID), .NO_STALL(!BACKPRESSURE)) dsp(
 	.clk(clk),
 	.rst(rst),
 
+	.s_stall_n(wait_data_n),
+
 	.s_adb_data({dsp_a, dsp_d, dsp_b}),
-	.s_adb_valid(pipe_stall_n),
+	.s_adb_valid(wait_data_n),
 	.s_adb_cmd(dsp_cmd[14:0]),
 	.s_adb_tag(dsp_tag),
 
@@ -255,6 +271,7 @@ dsp48e1_pipeline #(.ID(DSP_ID)) dsp(
 	.m_p_data(dsp_out_data),
 	.m_p_valid(dsp_ovalid_data[ch]),
 	.m_p_tag(dsp_out_tag[ch]),
+	.m_p_tv(dsp_ovt[ch]),
 
 	.m_p_svalid(dsp_p_svalid[4 * (ch + 1) - 1 : 4 * ch]),
 
@@ -270,30 +287,57 @@ assign o_data[ OWIDTH * (ch + 1) - 1 : OWIDTH * ch ] = dsp_out_data[ OWIDTH - 1 
 end
 endgenerate
 
-wire data_ovalid = (exe_cfg_omux) ? din_valid && pipe_stall_n : dsp_ovalid_data[0] && dsp_out_tag[0];
+wire data_oready;
+wire data_ovalid   = (exe_cfg_omux) ? din_valid && exe_pi_r : dsp_ovt[0];
+wire cmd_in_ready  = !exe_pi_r || din_valid;           // CMD isn't blocked by lacking of incoming data
+assign exe_ready   = cmd_in_ready && exe_cout_ready;
+assign din_ready   = exe_pi_r && exe_cout_ready;
 
-always @(posedge clk) begin
-	if (rst) begin
-		dout_valid <= 1'b0;
-		alarm_ovf  <= 1'b0;
-	end else begin
+generate
+if (BACKPRESSURE) begin
+    wire cmd_out_ready    = (!data_ovalid || data_oready);   // CMD isn't blocked by output backpressure
+    assign exe_cout_ready = (exe_cfg_omux && !LAST) ? exe_cin_ready : cmd_out_ready;
+    assign alarm_ovf      = 1'b0;
 
-		if (dout_ready) begin
-			dout_valid <= 1'b0;
-		end
-
-		if (data_ovalid) begin
-			dout_valid <= 1'b1;
-			dout_data  <= (exe_cfg_omux) ? din_data : o_data;
-		end
-
-		// Output data lost (next stage won't consume data)
-		if (data_ovalid && dout_valid && ~dout_ready) begin
-			alarm_ovf  <= 1'b1;
-		end
-	end
+    `ifdef SYM
+    always @(posedge clk) begin
+        if (!rst) begin
+            if (exe_cout_ready && data_ovalid && !data_oready) begin
+                $display("STAGE %d BUFFER VIOLATION!!!!", DSP_ID);
+                $finish;
+            end
+        end
+    end
+    `endif
+end else begin
+    reg alarm_ovf_r;
+    assign exe_cout_ready = 1'b1;
+    assign alarm_ovf = alarm_ovf_r;
+    always @(posedge clk) begin
+        if (rst) begin
+            alarm_ovf_r  <= 1'b0;
+        end else begin
+            if (data_ovalid && dout_valid && ~dout_ready) begin
+                alarm_ovf_r  <= 1'b1;
+            end
+        end
+    end
 end
+endgenerate
 
+
+axis_opt_pipeline #(.WIDTH(OWIDTH * CHANS), .PIPELINE(1'b1), .REG_READY(BACKPRESSURE)) out_reg (
+  .clk(clk),
+  .rst(rst),
+
+  .s_rx_tdata((exe_cfg_omux) ? din_data : o_data),
+  .s_rx_tvalid(data_ovalid && exe_cout_ready),
+  .s_rx_tready(data_oready),
+
+  .m_tx_tdata(dout_data),
+  .m_tx_tvalid(dout_valid),
+  .m_tx_tready(dout_ready)
+);
 
 endmodule
 

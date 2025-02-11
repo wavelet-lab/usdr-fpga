@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: CERN-OHL-P
 //
-// Copyright 2022-2024 Wavelet Lab
+// Copyright 2022-2025 Wavelet Lab
 //
 //
 module reconf_dsp_fir #(
@@ -9,7 +9,10 @@ module reconf_dsp_fir #(
 	parameter OUT_WIDTH = 16,
 	parameter CFG_WIDTH = 32,
 	parameter STAGES    = 8,
-	parameter SEQUENCER_DEEPBITS = 5
+	parameter SEQUENCER_DEEPBITS = 5,
+	parameter BACKPRESSURE = 0,
+	parameter HAS_C_PORT = 1,
+	parameter EXTERNAL_OMUX = 0
 )(
 	input rst,
 	input clk,
@@ -25,6 +28,7 @@ module reconf_dsp_fir #(
 	// input                                             cfg_rst,
 	input                                             cfg_valid,
 	input [CFG_WIDTH-1:0]                             cfg_data,
+	input [STAGES-1:0]                                cfg_e_omux,
 
 	output [STAGES-1:0]                               alarm_ovf
 );
@@ -67,6 +71,9 @@ assign out_valid = csscade_data_v[STAGES];
 assign csscade_data_r[STAGES] = out_ready;
 assign out_data = cascade_data[IN_WIDTH * CHANS * (STAGES + 1) - 1:IN_WIDTH * CHANS * STAGES];
 
+wire  [STAGES-1:0] elem_omux;
+wire  [STAGES  :0] exe_cready;
+assign exe_cready[STAGES] = out_ready;
 
 localparam SLICE_CFG_W = CFG_WIDTH / STAGES;
 
@@ -86,7 +93,7 @@ for (i = 0; i < STAGES; i = i + 1) begin: dsp_stage
 
 	wire [CMD_DSPC_W - 1:0]         seq_cmd_dsp   = seq_ucode[CMD_DSPC_W - 1 + CMD_DSPC_OFF:CMD_DSPC_OFF];
 	wire                            seq_cmd_dspex = (seq_cmd_dsp == 2'b00) && (seq_cmd_pc[1:0] == 2'b11); // ISA compression to fit PIp instruction
-	wire                            seq_omux      = seq_ucode[CMD_OMUX_OFF];
+	wire                            seq_omux      = EXTERNAL_OMUX ? cfg_e_omux[i] : seq_ucode[CMD_OMUX_OFF];
 
 	wire                            seq_fifo_padl = seq_ucode[CMD_FIFO_CMDS_OFF + 0];
 	wire                            seq_fifo_pcl  = seq_ucode[CMD_FIFO_CMDS_OFF + 1];
@@ -98,7 +105,11 @@ for (i = 0; i < STAGES; i = i + 1) begin: dsp_stage
 	wire [IN_WIDTH * CHANS - 1:0]   pdata_in   = cascade_data[IN_WIDTH * CHANS * (i + 1) - 1:IN_WIDTH * CHANS * i];
 	wire [IN_WIDTH * CHANS - 1:0]   pdata_out;
 
+	// seq_omux is constant after reconfiguration, pipeline to relax timing
+    reg                             seq_omux_r;
+
 	assign cascade_data[IN_WIDTH * CHANS * (i + 2) - 1:IN_WIDTH * CHANS * (i + 1)] = pdata_out;
+    assign elem_omux[i] = seq_omux_r;
 
 	srl_ra #(
 		.WIDTH(CMD_SLICE_WIDTH), .IN_WIDTH(SLICE_CFG_W), .DEEP(1 << SEQUENCER_DEEPBITS),
@@ -110,9 +121,9 @@ for (i = 0; i < STAGES; i = i + 1) begin: dsp_stage
 	 	.clk(clk), .we(cfg_valid), .data_i(cfg_s_data), .addr_i(seq_pc_reg), .data_o(seq_ucode_s), .ce(pipe_stall_n), .rstq(rst /*cfg_rst*/), .dataq_o(seq_ucode)
 	);
 
-	assign pipe_stall_n = !seq_fifo_pir || csscade_data_v[i];
-
 	always @(posedge clk) begin
+	    seq_omux_r <= seq_omux;
+
 		if (/*cfg_rst ||*/ rst) begin
 			seq_pc_reg <= 0;
 		end else begin
@@ -133,7 +144,11 @@ for (i = 0; i < STAGES; i = i + 1) begin: dsp_stage
 		.FIFO_PF_BITS(CMD_PC_W),
 		.CMD_WIDTH(3),
 		.C_PIPELINE(1), // FIXME: !!!!
-		.DSP_ID(i)
+		.DSP_C_P(HAS_C_PORT),
+		.DSP_ID(i),
+		.EXT_STALL(1),
+		.BACKPRESSURE(BACKPRESSURE),
+		.LAST(i == STAGES - 1)
 	) element (
 		.rst(rst /* cfg_rst */),
 		.clk(clk),
@@ -165,7 +180,11 @@ for (i = 0; i < STAGES; i = i + 1) begin: dsp_stage
 		.exe_pi_r(seq_fifo_pir),
 		.exe_pp_l(seq_fifo_ppl), // Push data signal to the next stage
 		.exe_cmd({ seq_cmd_dspex, seq_cmd_dsp }),
-		.exe_cfg_omux(seq_omux),
+		.exe_cfg_omux(elem_omux[i]),
+        .exe_ready(pipe_stall_n),
+
+        .exe_cin_ready(exe_cready[i+1]),
+        .exe_cout_ready(exe_cready[i]),
 
 		.alarm_ovf(alarm_ovf[i])
 	);
