@@ -66,7 +66,9 @@ wire [1:0] scl_out_t;
 assign sda_out_eo = ~sda_out_t;
 assign scl_out_eo = ~scl_out_t;
 
-wire rx_valid;
+wire        rx_valid;
+wire        rx_ready;
+wire [31:0] rx_data;
 
 axis_i2c_smaster #(
     .BUS_COUNT(2),
@@ -96,25 +98,39 @@ axis_i2c_smaster #(
     .s_valid(s_cmd_valid),
     .s_ready(s_cmd_ready),
 
-    .m_rx_data(m_rb_data),
+    .m_rx_data(rx_data),
     .m_rx_valid(rx_valid),
-    .m_rx_ready(1'b1)
+    .m_rx_ready(rx_ready)
 );
-assign m_rb_valid = 1'b1;
 
+reg        temp_valid;
+reg [31:0] temp_data;
 
 always @(posedge clk) begin
     if (rst) begin
-        m_int_valid  <= 1'b0;
+        temp_valid  <= 1'b0;
+        m_int_valid <= 1'b0;
     end else begin
         if (m_int_valid && m_int_ready) begin
             m_int_valid <= 1'b0;
         end
 
-        if (rx_valid) begin
+        if (temp_valid && m_rb_ready) begin
+            temp_valid <= 1'b0;
+        end
+
+        if (rx_valid && rx_ready) begin
+            temp_data   <= rx_data;
+            temp_valid  <= 1'b1;
             m_int_valid <= 1'b1;
         end
+
     end
 end
+
+assign rx_ready   = !m_int_valid && !temp_valid;
+assign m_rb_data  = temp_data;
+assign m_rb_valid = 1'b1;
+
 
 endmodule
