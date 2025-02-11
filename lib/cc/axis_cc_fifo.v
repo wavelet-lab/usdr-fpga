@@ -5,6 +5,8 @@
 // USDR PROJECT
 // CLEAN
 //
+// RX_VALID_PIPELINE_S will break AXI-S rule: valid should not wait for ready
+// use this parameter with caution and only to optmize timing in hot places!
 module axis_cc_fifo #(
     parameter         WIDTH = 32,
     parameter         DEEP = 32,
@@ -13,7 +15,8 @@ module axis_cc_fifo #(
     parameter         ASYNC_RESET = 0,
     parameter         ULTRA_SCALE = 0,
     parameter         DATA_PIPELINE = 1,
-    parameter [0:0]   RX_READY_PIPELINE = 1
+    parameter [0:0]   RX_READY_PIPELINE = 1,
+    parameter [0:0]   RX_VALID_PIPELINE_S = 0
 ) (
 
   input                            rx_clk,
@@ -23,7 +26,7 @@ module axis_cc_fifo #(
   input                            s_rx_tvalid,
   output                           s_rx_tready,
 
-  
+
   input                            tx_clk,
   input                            tx_rst,
 
@@ -53,7 +56,7 @@ cc_counter #(
    .in_rst(rx_rst),
    .in_increment(rclk_addr_inc),
    .in_counter(rclk_rx_addr),
-   
+
    .out_clk(tx_clk),
    .out_rst(tx_rst),
    .out_counter(tclk_rx_addr)
@@ -67,7 +70,7 @@ cc_counter #(
    .in_rst(tx_rst),
    .in_increment(tclk_addr_inc),
    .in_counter(tclk_tx_addr),
-   
+
    .out_clk(rx_clk),
    .out_rst(rx_rst),
    .out_counter(rclk_tx_addr)
@@ -97,7 +100,7 @@ axis_opt_pipeline #(.WIDTH(WIDTH), .PIPELINE(DATA_PIPELINE)) out (
 );
 
 wire [DEEP_BITS:0] rclk_fifo_used   = rclk_rx_addr - rclk_tx_addr + RX_READY_PIPELINE;
-wire [DEEP_BITS:0] tclk_fifo_used_n = tclk_rx_addr - tclk_tx_addr - 1'b1;
+wire [DEEP_BITS:0] tclk_fifo_used_n = tclk_rx_addr - tclk_tx_addr - 1'b1 - RX_VALID_PIPELINE_S;
 
 generate
 if (RX_READY_PIPELINE) begin
@@ -115,7 +118,21 @@ end else begin
 end
 endgenerate
 
-assign      tclk_valid    = ~tclk_fifo_used_n[DEEP_BITS];
 
+generate
+if (RX_VALID_PIPELINE_S) begin
+  reg tclk_valid_p;
+  always @(posedge tx_clk) begin
+    if (tx_rst) begin
+      tclk_valid_p <= 1'b0;
+    end else begin
+      tclk_valid_p <= ~tclk_fifo_used_n[DEEP_BITS];
+    end
+  end
+  assign      tclk_valid = tclk_valid_p;
+end else begin
+  assign      tclk_valid = ~tclk_fifo_used_n[DEEP_BITS];
+end
+endgenerate
 
 endmodule

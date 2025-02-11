@@ -14,7 +14,8 @@ module axis_opt_cc_fifo #(
   parameter ASYNC_RESET = 0,
   parameter ULTRA_SCALE = 0,
   parameter CC_DATA_PIPELINED = 1,
-  parameter DIRECT_DATA_PIPELINED = 0
+  parameter DIRECT_DATA_PIPELINED = 0,
+  parameter CC_RX_VALID_PIPELINE_S = 1'b0
 ) (
   input                            rx_clk,
   input                            rx_rst,
@@ -43,7 +44,8 @@ if (CLK_CC && (DEEP > 0)) begin
         .DEEP(DEEP),
         .DATA_PIPELINE(1'b0),
         .ULTRA_SCALE(ULTRA_SCALE),
-        .ASYNC_RESET(ASYNC_RESET)
+        .ASYNC_RESET(ASYNC_RESET),
+        .RX_VALID_PIPELINE_S(CC_RX_VALID_PIPELINE_S)
     ) cc_fifo (
         .rx_clk(rx_clk),
         .rx_rst(rx_rst),
@@ -61,7 +63,7 @@ if (CLK_CC && (DEEP > 0)) begin
     );
 end else if (CLK_CC) begin
     // Simple syncronization. asuming data propagation path is less than syncronization time. In general this asumption might be wrong, so
-    // use with cation! As a simple solution you can increase syncronization time (CC_SYNC_STAGES)
+    // use with caution! As a simple solution you can increase syncronization time (CC_SYNC_STAGES)
     reg  wa;
     wire wb;
     wire ra;
