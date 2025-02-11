@@ -6,7 +6,8 @@
 module usdr_top_all #(
     parameter [7:0] DEVICE_ID = 8'h2f,
     parameter [7:0] DEVICE_REVISION = 4,
-    parameter       USB2_PRESENT = 1'b0
+    parameter       USB2_PRESENT = 1'b1,
+    parameter       PCIE_INIT_ONLY = 1'b0
 )(
   output  [1:0] pci_exp_txp,
   output  [1:0] pci_exp_txn,
@@ -344,7 +345,7 @@ wire init_usb_clk_done;
 wire                 pipe_mmcm_lock_out;
 
 xlnx_startup_mmcm #(
-    .PCIE_BITS(PCIE_BITS)
+    .PCIE_INIT_ONLY(PCIE_INIT_ONLY)
 ) sfsm (
     .cfg_mclk(cfg_mclk),
     .startup_mode_pcie(startup_mode_pcie),
@@ -764,7 +765,7 @@ app_usdr_pcie #(
     .igpo_dcen(dcen_ctrl),
     .igpo_led(led_aux),
 
-    .usb2_altrst_valid(~startup_mode_pcie),
+    .usb2_altrst_valid(cfg_startup_mode_usb),
     .usb2_altrst_logicrst(brng_usb_logic_reset),
     .usb2_altrst_phynrst(brng_phy_nrst),
 
