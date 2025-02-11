@@ -8,26 +8,31 @@
 module dsp48e1_pipeline #(
 	parameter TAG_WIDTH = 1'b1,
 	parameter RESET_DSP48 = 1'b0,
-	parameter [7:0] ID = 0
+	parameter [7:0] ID = 0,
+	parameter NO_STALL = 1'b1,
+	parameter ID_V_B = 0
 )(
 	input                  clk,
 	input                  rst,
-	
+
+	input                  s_stall_n,
+
 	input [30+25+18-1:0]   s_adb_data,
 	input                  s_adb_valid,
 	input [14:0]           s_adb_cmd,
 	input [TAG_WIDTH-1:0]  s_adb_tag,
-	
+
 	// Async C update
 	input [47:0]           s_c_data,
 	input                  s_c_valid,
-	
+
 	output [47:0]          m_p_data,
 	output                 m_p_valid,
 	output [TAG_WIDTH-1:0] m_p_tag,
-	
+	output reg             m_p_tv,
+
 	output [3:0]           m_p_svalid,
-	
+
 	// Cascase
 	output [47:0]          dspcasc_p_o,
 	input  [47:0]          dspcasc_p_i
@@ -40,7 +45,7 @@ module dsp48e1_pipeline #(
 //    0000101_0000_000    P = 0 + A*B       0280
 //
 //  0_0001100_0000_001    P = C + 0 + 0     0601
-//  000_0110_0000_0001 
+//  000_0110_0000_0001
 //
 // inmode:
 //                 000 : A
@@ -97,14 +102,20 @@ reg [TAG_WIDTH-1:0] TAG_e2;
 reg [TAG_WIDTH-1:0] TAG_e3;
 assign m_p_tag = TAG_e3;
 
-wire rst_dsp = rst & RESET_DSP48;
+wire rst_dsp      = rst & RESET_DSP48;
+wire glob_stall_n = (NO_STALL || s_stall_n);
+wire dspr_stall_n = glob_stall_n; // 1'b1
 
 always @(posedge clk) begin
 	if (rst) begin
 		stage_valid_r <= 0;
-	end else begin
+		m_p_tv        <= 0;
+		
+	end else if (glob_stall_n) begin
 		stage_valid_r <= stage_valid;
 		
+		m_p_tv        <= stage_valid[3] && TAG_e2; // TODO: check!
+
 		if (stage_valid[0]) begin
 			//INMODE_e0         <= s_adb_cmd[2:0];
 			OPMODE_ALUMODE_e0 <= s_adb_cmd[13:3];
@@ -112,17 +123,17 @@ always @(posedge clk) begin
 			TAG_e0            <= s_adb_tag;
 			//$display("%g: DSP48.%0d.0 IN=%b OP=%b  A=%x D=%x B=%x", $time, ID, s_adb_cmd[2:0], s_adb_cmd[13:3], s_adb_data[29+25+18:25+18], s_adb_data[24+18:18], s_adb_data[17:0]);
 		end
-		
+
 		if (stage_valid[1]) begin
 			OPMODE_ALUMODE_e1 <= OPMODE_ALUMODE_e0;
 			ROUND_MUL_e1      <= ROUND_MUL_e0;
 			TAG_e1            <= TAG_e0;
 		end
-		
+
 		if (stage_valid[2]) begin
 			TAG_e2            <= TAG_e1;
 		end
-		
+
 		if (stage_valid[3]) begin
 			TAG_e3            <= TAG_e2;
 		end
@@ -171,7 +182,7 @@ DSP48E1 #(
 
 	.CARRYOUT(),                      // 4-bit output: Carry output
 	.P(m_p_data),                     // 48-bit output: Primary data output
-	
+
 	.ACIN(),                          // 30-bit input: A cascade data input
 	.BCIN(),                          // 18-bit input: B cascade input
 	.CARRYCASCIN(),                   // 1-bit input: Cascade carry input
@@ -190,20 +201,20 @@ DSP48E1 #(
 	.CARRYIN(1'b0),                   // 1-bit input: Carry input signal
 	.D(s_adb_data[24+18:18]),         // 25-bit input: D data input
 
-	.CEA1(1'b0),                      // 1-bit input: Clock enable input for 1st stage AREG
-	.CEA2(stage_valid[0]),            // 1-bit input: Clock enable input for 2nd stage AREG
-	.CEAD(stage_valid[1]),            // 1-bit input: Clock enable input for ADREG
-	.CEALUMODE(stage_valid[2]),       // 1-bit input: Clock enable input for ALUMODE
-	.CEB1(stage_valid[0]),            // 1-bit input: Clock enable input for 1st stage BREG
-	.CEB2(stage_valid[1]),            // 1-bit input: Clock enable input for 2nd stage BREG
-	.CEC(s_c_valid),                  // 1-bit input: Clock enable input for CREG
-	.CECARRYIN(stage_valid[2]),       // 1-bit input: Clock enable input for CARRYINREG
-	.CECTRL(stage_valid[2]),          // 1-bit input: Clock enable input for OPMODEREG and CARRYINSELREG
-	.CED(stage_valid[0]),             // 1-bit input: Clock enable input for DREG
-	.CEINMODE(stage_valid[0]),        // 1-bit input: Clock enable input for INMODEREG
-	.CEM(stage_valid[2]),             // 1-bit input: Clock enable input for MREG
-	.CEP(stage_valid[3]),             // 1-bit input: Clock enable input for PREG
-                  
+	.CEA1(dspr_stall_n && 1'b0),                      // 1-bit input: Clock enable input for 1st stage AREG
+	.CEA2(dspr_stall_n && stage_valid[0]),            // 1-bit input: Clock enable input for 2nd stage AREG
+	.CEAD(dspr_stall_n && stage_valid[1]),            // 1-bit input: Clock enable input for ADREG
+	.CEALUMODE(dspr_stall_n && stage_valid[2]),       // 1-bit input: Clock enable input for ALUMODE
+	.CEB1(dspr_stall_n && stage_valid[0]),            // 1-bit input: Clock enable input for 1st stage BREG
+	.CEB2(dspr_stall_n && stage_valid[1]),            // 1-bit input: Clock enable input for 2nd stage BREG
+	.CEC(dspr_stall_n && s_c_valid),                  // 1-bit input: Clock enable input for CREG
+	.CECARRYIN(dspr_stall_n && stage_valid[2]),       // 1-bit input: Clock enable input for CARRYINREG
+	.CECTRL(dspr_stall_n && stage_valid[2]),          // 1-bit input: Clock enable input for OPMODEREG and CARRYINSELREG
+	.CED(dspr_stall_n && stage_valid[0]),             // 1-bit input: Clock enable input for DREG
+	.CEINMODE(dspr_stall_n && stage_valid[0]),        // 1-bit input: Clock enable input for INMODEREG
+	.CEM(dspr_stall_n && stage_valid[2]),             // 1-bit input: Clock enable input for MREG
+	.CEP(glob_stall_n && stage_valid[3]),             // 1-bit input: Clock enable input for PREG
+
 	.RSTA(rst_dsp),                   // 1-bit input: Reset input for AREG
 	.RSTALLCARRYIN(rst_dsp),          // 1-bit input: Reset input for CARRYINREG
 	.RSTALUMODE(rst_dsp),             // 1-bit input: Reset input for ALUMODEREG
