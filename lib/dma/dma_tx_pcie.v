@@ -73,7 +73,7 @@ reg [RAM_ADDR_WIDTH-1:7]           req_cnt;
 wire                               tag_valid;
 
 wire [RAM_ADDR_WIDTH:DATA_BITS]    m_tcq_laddr_e      = s_rq_loc_addr + len_requested_plus;
-wire [RAM_ADDR_WIDTH-1:8]          cfg_max_req_sz_e   = (1 << ((cfg_max_req_sz_d + 1'b1) >> 1));
+wire [RAM_ADDR_WIDTH-1:8]          cfg_max_req_sz_e   = (cfg_max_req_sz_d == 0) ? 1 : (1 << (cfg_max_req_sz_d - 1));
 wire [RAM_ADDR_WIDTH:8]            loc_addr_available = s_consume_ram_addr - m_tcq_laddr_e[RAM_ADDR_WIDTH:8] - cfg_max_req_sz_e + ((1<<(RAM_ADDR_WIDTH-8)) - 1'b1);
 assign                             fifo_full          = loc_addr_available[RAM_ADDR_WIDTH];
 
@@ -84,13 +84,11 @@ always @(posedge clk) begin
         req_cnt       <= 0;
     end else begin
 
-        if (tag_valid && s_rq_valid && !s_rq_ready) begin
-            if (m_tcq_valid && m_tcq_ready) begin
-                len_requested <= len_requested + len_pcie_req + 1'b1;
-                req_cnt       <= req_cnt + 1'b1;
-                if (last_pcie_req) begin
-                    s_rq_ready <= 1'b1;
-                end
+        if (m_tcq_valid && m_tcq_ready) begin
+            len_requested <= len_requested + len_pcie_req + 1'b1;
+            req_cnt       <= req_cnt + 1'b1;
+            if (last_pcie_req) begin
+                s_rq_ready <= 1'b1;
             end
         end
 
