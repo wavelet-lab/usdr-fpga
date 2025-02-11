@@ -24,33 +24,18 @@ module axis_opt_pipeline #(
 
 generate
 if (PIPELINE && REG_READY) begin
-	reg [WIDTH - 1:0] data;
-	reg               valid;
+    axis_fifo_trd #(.WIDTH(WIDTH)) axis_fifo_trd (
+        .clk(clk),
+        .rst(rst),
 
-	reg [WIDTH - 1:0] ext_data;
-	reg               ext_valid;
+        .s_rx_tdata(s_rx_tdata),
+        .s_rx_tvalid(s_rx_tvalid),
+        .s_rx_tready(s_rx_tready),
 
-	always @(posedge clk) begin
-		if (rst) begin
-			valid     <= 0;
-			ext_valid <= 0;
-		end else begin
-			if (s_rx_tready) begin
-				if (s_rx_tvalid) begin
-					data  <= s_rx_tdata;
-				end
-				valid <= s_rx_tvalid;
-				if (~m_tx_tready) begin
-					ext_data  <= data;
-					ext_valid <= valid;
-				end
-			end
-		end
-	end
-
-	assign s_rx_tready = ~ext_valid;
-	assign m_tx_tdata  = (ext_valid) ? ext_data : data;
-	assign m_tx_tvalid = valid || ext_valid;
+        .m_tx_tdata(m_tx_tdata),
+        .m_tx_tvalid(m_tx_tvalid),
+        .m_tx_tready(m_tx_tready)
+    );
 end else if (PIPELINE) begin
 	reg [WIDTH - 1:0] data;
 	reg               valid;
@@ -63,7 +48,7 @@ end else if (PIPELINE) begin
 			if (ready && valid) begin
 				valid <= 0;
 			end
-			
+
 			if (s_rx_tvalid && s_rx_tready) begin
 				data  <= s_rx_tdata;
 				valid <= 1'b1;
