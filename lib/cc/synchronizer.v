@@ -8,9 +8,9 @@
 // a_in  -- async input
 // s_out -- sync output
 module synchronizer #(
-   parameter INIT         = 0,
-   parameter ASYNC_RESET  = 0,
-   parameter SYNC_STAGES  = 2
+   parameter [0:0] INIT         = 0,
+   parameter       ASYNC_RESET  = 0,
+   parameter       SYNC_STAGES  = 2
 ) (
    input  clk,
    input  rst,
