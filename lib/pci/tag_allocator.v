@@ -11,6 +11,7 @@ module tag_allocator #(
 
     output core_ready,
     output notags,
+    output [PCIE_TAG_BITS:0]   tag_fifo_used,
 
     output [PCIE_TAG_BITS-1:0] m_tag_alloc_data,
     input                      m_tag_alloc_ready,
@@ -33,10 +34,7 @@ always @(posedge clk) begin
     end
 end
 assign core_ready = tag_reset_ready;
-
-
-wire [PCIE_TAG_BITS:0]   tag_fifo_used;
-assign notags = (tag_fifo_used == (1 << PCIE_TAG_BITS));
+assign notags     = (tag_fifo_used == (1 << PCIE_TAG_BITS));
 
 axis_fifo #(.DEEP(1<<PCIE_TAG_BITS), .WIDTH(PCIE_TAG_BITS), .EXTRA_REG(1'b1)) tag_allocator_fifo (
     .clk(clk),
