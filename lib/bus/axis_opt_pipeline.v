@@ -7,6 +7,7 @@
 //
 module axis_opt_pipeline #(
   parameter         WIDTH     = 32,
+  parameter         PIPE_PASSTHROUGH = 0,
   parameter         PIPELINE  = 1,
   parameter         REG_READY = 0
 ) (
@@ -36,6 +37,24 @@ if (PIPELINE && REG_READY) begin
         .m_tx_tvalid(m_tx_tvalid),
         .m_tx_tready(m_tx_tready)
     );
+end else if (PIPE_PASSTHROUGH) begin
+    reg [WIDTH - 1:0] data;
+    reg               valid;
+    assign s_rx_tready = m_tx_tready;
+	assign m_tx_tdata  = data;
+	assign m_tx_tvalid = valid;
+
+    always @(posedge clk) begin
+        if (s_rx_tready) begin
+            data  <= s_rx_tdata;
+        end
+    
+        if (rst) begin
+            valid <= 1'b0;
+        end else if (s_rx_tready) begin    
+            valid <= s_rx_tvalid;
+        end
+    end
 end else if (PIPELINE) begin
 	reg [WIDTH - 1:0] data;
 	reg               valid;
