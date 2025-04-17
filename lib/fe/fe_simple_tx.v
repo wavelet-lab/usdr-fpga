@@ -7,6 +7,7 @@
 module fe_simple_tx #(
     parameter TIMESTAMP_BITS = 48,
     parameter RAM_ADDR_WIDTH = 18,
+    parameter DESCR_DATA_BITS = 3,
     parameter DATA_BITS = 3,
     parameter DATA_WIDTH = 8 << DATA_BITS,
     parameter FE_IDX_BITS = 5,
@@ -19,18 +20,26 @@ module fe_simple_tx #(
     parameter EXACT_SAMPLES_CHECK = 1,
     parameter INITIAL_TS_COMP = FRAME_LENGTH,
     parameter ASYNC_CLK = 1,  // clk & m_fedma_clk are async to each other
-    parameter WITH_NOTS_BIT = 1
+    parameter WITH_NOTS_BIT = 1,
+    parameter SUPPORT_8CH      = 1'b0,
+    parameter SUPPORT_4CH      = 1'b0,
+    parameter TX_OLD_FLAGS     = 1'b1,
+    parameter ULTRA_SCALE      = 1'b0,
+    parameter RAW_CHANS        = 4,
+    parameter DAC_CMD_WIDTH    = 1
 )(
     input clk,
     input rst,
 
-    // Burst processed and is ready to be reused (clocked @m_fedma_clk)
-    output                                m_proc_idx_valid,
-    input                                 m_proc_idx_ready,
+    input rst_fe, // Not used
 
-    output                                s_descr_ready,
-    input                                 s_descr_valid,
-    input  [FE_DESCR_WIDTH-1:0]           s_descr_data,
+    // Burst processed and is ready to be reused (clocked @m_fedma_clk)
+    output                                  m_proc_idx_valid,
+    input                                   m_proc_idx_ready,
+
+    output                                  s_descr_ready,
+    input                                   s_descr_valid,
+    input  [FE_DESCR_WIDTH-1:0]             s_descr_data,
 
     // CC-stat
     input                                   m_fedma_clk,
@@ -42,7 +51,7 @@ module fe_simple_tx #(
     // Configurations
     input [1:0]                             cfg_mute,
     input                                   cfg_swap,
-    input                                   cfg_format,
+    input [1:0]                             cfg_format,
 
     output                                  sig_underrun,
 
@@ -57,6 +66,10 @@ module fe_simple_tx #(
     input       [ID_WIDTH-1:0]              m_fifo_rid,
     output                                  m_fifo_rready,
 
+    // Clocked at m_fedma_clk
+    input [31:0] s_fe_cmd_data,
+    input        s_fe_cmd_valid,
+    output       s_fe_cmd_ready,
 
     // DATA to DACs
     output reg [DATA_WIDTH-1:0]       dac_data,
@@ -65,6 +78,8 @@ module fe_simple_tx #(
     output                            dac_frame,  // LFMC clock
     input                             dac_sync    // crossing from 0->1 resets TX timer
 );
+
+assign s_fe_cmd_ready = 1'b1;
 
 localparam [TIMESTAMP_BITS-1:0] timestamp_advance = INITIAL_TS_COMP + 4;
 
@@ -108,7 +123,7 @@ if (ASYNC_CLK) begin
     );
 
     synchronizer #( .INIT(1) /*, .ASYNC_RESET(1) */ ) dac_sync_dma_cc (.clk(m_fedma_clk), .rst(1'b0), .a_in(!dac_sync), .s_out(dac_nsync_fedma_clk));
-    synchronizer  dma_addr_rst_cc (.clk(m_fedma_clk), .rst(1'b0), .a_in(m_fedma_rst), .s_out(ram_addr_rst));
+    synchronizer  dma_addr_rst_cc (.clk(clk), .rst(1'b0), .a_in(m_fedma_rst), .s_out(ram_addr_rst));
 end else begin
     assign ram_addr_rst = m_fedma_rst;
 
@@ -228,30 +243,30 @@ assign                  s_descr_ready    = descriptor_ready;
 reg [1:0]                    data_state;
 reg [SAMPLES_CHECK_BITS-1:0] data_samples;
 //reg [0:0]                    data_format;
-wire [0:0]                   data_format;
+wire [1:0]                   data_format;
 
 // Supported data formats
-localparam [0:0]
-    DF_CI16_1 = 0,   // 1x Complex Chan 16bit
-    DF_CI16_2 = 1;   // 2x Complex Chan 16bit
-    //  DF_CI16_4    // 4x Complex Chan 16bit
-    //  DF_CI16_8    // 8x Complex Chan 16bit
+localparam [1:0]
+    DF_CI16_1 = 2'b00,   // 1x Complex Chan 16bit
+    DF_CI16_2 = 2'b01,   // 2x Complex Chan 16bit
+    DF_CI16_4 = 2'b10,   // 4x Complex Chan 16bit
+    DF_CI16_8 = 2'b11;   // 8x Complex Chan 16bit
     //  DF_CI12_1
     //  DF_CI12_2
     //  DF_CI12_4
     //  DF_CI12_8
-    //  DF_CI8_1
-    //  DF_CI8_2
-    //  DF_CI8_4
-    //  DF_CI8_8
 
 reg                             underrung_sig;
 
 
-wire [31:0] data_dfci16_1 = (DATA_BITS == 4 && data_state == 2) ? m_fifo_rdata[95:64] :
-                            (DATA_BITS == 4 && data_state == 3) ? m_fifo_rdata[127:96] :
+wire [31:0]  data_dfci16_1 = (DATA_BITS == 4 && data_state == 2) ? m_fifo_rdata[95:64] :
+                             (DATA_BITS == 4 && data_state == 3) ? m_fifo_rdata[127:96] :
                                                 data_state == 1 ? m_fifo_rdata[63:32] :  m_fifo_rdata[31:0];
-wire [63:0] data_dfci16_2 = (DATA_BITS == 4 && data_state == 1) ? m_fifo_rdata[127:64] : m_fifo_rdata[63:0];
+wire [63:0]  data_dfci16_2 = (DATA_BITS == 4 && data_state == 1) ? m_fifo_rdata[127:64] : m_fifo_rdata[63:0];
+
+wire [63:0]  data_dfci16_2_m = (TX_OLD_FLAGS && cfg_swap) ? { data_dfci16_2[31:0], data_dfci16_2[63:32] } : data_dfci16_2;
+wire [127:0] data_dfci16_4 = m_fifo_rdata;
+
 
 always @(posedge clk) begin
     if (ram_addr_rst) begin
@@ -354,7 +369,11 @@ always @(posedge clk) begin
                     else if (DATA_BITS == 4 && data_state == 1)
                         data_state <= 0;
 
-                    dac_data[63:0] <= cfg_swap ? { data_dfci16_2[31:0], data_dfci16_2[63:32] } : data_dfci16_2;
+                    dac_data <= {(DATA_WIDTH / 64){ data_dfci16_2_m }};
+                end
+
+                DF_CI16_4: if (SUPPORT_4CH) begin
+                    dac_data <= data_dfci16_4;
                 end
                 endcase
             end
@@ -373,10 +392,10 @@ always @(posedge clk) begin
             end
         end
 
-        if (cfg_mute[0]) begin
+        if (cfg_mute[0] && TX_OLD_FLAGS) begin
             dac_data[31:0] <= 0;
         end
-        if ((DATA_WIDTH > 32) && cfg_mute[1]) begin
+        if ((DATA_WIDTH > 32) && cfg_mute[1] && TX_OLD_FLAGS) begin
             dac_data[63:32] <= 0;
         end
 
@@ -389,7 +408,7 @@ wire burst_samples_boundary = (EXACT_SAMPLES_CHECK && m_fifo_rid[0] && (m_fifo_r
 
 assign m_fifo_rready   = dac_ready && (burst_samples_boundary || (
     DATA_BITS == 3 ?   ((data_format == DF_CI16_1 && data_state[0:0] == 1'd1) || (data_format == DF_CI16_2)) :
-/*  DATA_BITS == 4 ?*/ ((data_format == DF_CI16_1 && data_state[1:0] == 2'd3) || (data_format == DF_CI16_2 && data_state[0:0] == 1'd1))));
+/*  DATA_BITS == 4 ?*/ ((data_format == DF_CI16_1 && data_state[1:0] == 2'd3) || (data_format == DF_CI16_2 && data_state[0:0] == 1'd1) || (data_format == DF_CI16_4))));
 
 assign m_fifo_araddr = m_fifo_araddr_e;
 assign data_format   = cfg_format;

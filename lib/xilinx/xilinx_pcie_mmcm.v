@@ -12,7 +12,8 @@ module xilinx_pci_mmcm #(
     parameter PCIE_LINK_SPEED    = 2,                       // PCIe link speed
     parameter PCIE_USERCLK_FREQ  = 3,                       // PCIe user clock 1 frequency
     parameter PCIE_GEN1_MODE     = 0,
-    parameter PCIE_ALT_CLOCK     = 0
+    parameter PCIE_ALT_CLOCK     = 0,
+    parameter CLK_333_DIV        = 3
 )(
     input                       rst_n_i,
     input [PCIE_ALT_CLOCK:0]    refclk_i,
@@ -44,7 +45,7 @@ localparam          CLKOUT3_DIVIDE   = 8;
 
 localparam          CLKOUT4_DIVIDE   = 20; // 50 Mhz
 localparam          CLKOUT5_DIVIDE   = 5;  //200 Mhz
-localparam          CLKOUT6_DIVIDE   = 3;  //333 Mhz
+localparam          CLKOUT6_DIVIDE   = CLK_333_DIV;  //333 Mhz
 
 wire [1:0]                  refclk;
 wire                        refclk_sel;

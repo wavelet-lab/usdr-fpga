@@ -6,6 +6,7 @@ module usdr_app_generic_us #(
     parameter SPI_WIDTH      = 32'h00_18_18_18,
     parameter SPI_DIV        = 32'h80_80_80_80,
     parameter SPI_COUNT      = 4,
+    parameter I2C_COUNT      = 1,
     parameter SPI_EXT_PRESENT = 0,
     parameter IGPI_COUNT     = 1,
     parameter IGPO_COUNT     = 1,
@@ -27,7 +28,20 @@ module usdr_app_generic_us #(
     parameter USDR_PID            = 0,
     parameter TX_FRAME_LENGTH     = 32,
     parameter TX_INITIAL_TS_COMP  = TX_FRAME_LENGTH,
-    parameter USE_EXT_ADC_CLK     = 0
+    parameter USE_EXT_ADC_CLK     = 0,
+    parameter USE_EXT_DAC_CLK     = 0,
+    parameter _I2C_PORT_COUNT     = (I2C_COUNT > 1) ? 4 : 2,
+    parameter COLLAPSE_RQ_EVENT   = 1'b1,
+    parameter COLLAPSE_CC_REPLY   = 1'b1,
+    parameter ADC_CHANS           = 4,
+    parameter ADC_WIDTH           = 16,
+    parameter DAC_CHANS           = 4,
+    parameter DAC_WIDTH           = 16,
+    parameter ADC_FLAG_WIDTH      = 1,
+    parameter TX_SUPPORT_8CH      = 1'b0,
+    parameter TX_SUPPORT_4CH      = 1'b0,
+    parameter [0:0] TX_EX_CORE    = 1'b0,
+    parameter WIDE_DMA_TO_FE      = 1'b0
 )(
     // high speed data interfaces
     input          hrst,
@@ -61,7 +75,17 @@ module usdr_app_generic_us #(
     output                                     s_axis_cc_tvalid,
     input                                      s_axis_cc_tready,
 
+
     input [5:0]    pcie7s_tx_buf_av,
+
+    // US transmit ordering control
+    input [5:0]    pcieus_rq_seq_num0,
+    input          pcieus_rq_seq_num_vld0,
+    input [5:0]    pcieus_rq_seq_num1,
+    input          pcieus_rq_seq_num_vld1,
+
+    input [7:0]    cfg_fc_ph,
+    input [11:0]   cfg_fc_pd,
 
     // pci configuration
     input [15:0]   cfg_completer_id,
@@ -78,19 +102,25 @@ module usdr_app_generic_us #(
     output [4:0]   cfg_pciecap_interrupt_msgnum,
 
     // streaming ADC
-    input          adc_clk_ext, // External ADC clock when USE_EXT_ADC_CLK is activated
-    input [63:0]   adc_realigned,
-    input          adc_fifo_valid,
-    output         rx_ready,
-    output         rx_streaming,
-    output [3:0]   adc_ch_enable,
+    input                               adc_clk_ext, // External ADC clock when USE_EXT_ADC_CLK is activated
+    input                               adc_rst_ext,
+    input [ADC_CHANS * ADC_WIDTH - 1:0] adc_realigned,
+    input                               adc_fifo_valid,
+    input [ADC_FLAG_WIDTH - 1:0]        adc_flags,
+
+    output                              rx_ready,
+    output                              rx_streaming,
+    output [ADC_CHANS-1:0]              adc_ch_enable,
+    output                              adc_enable,
 
     // streaming DAC
-    input          dac_clk,
-    output [63:0]  dac_realigned,
-    output         dac_fifo_valid,
-    input          tx_ready,
-    output         tx_streaming,
+    input                                dac_clk_ext,
+    input                                dac_rst_ext,
+    output [DAC_CHANS * DAC_WIDTH - 1:0] dac_realigned,
+    output                               dac_fifo_valid,
+    output                               dac_frame,
+    input                                tx_ready,
+    output                               tx_streaming,
 
     // USB2 ULPI interface
     input          phy_rst,
@@ -108,10 +138,10 @@ module usdr_app_generic_us #(
     input          prst,
     input          pclk,
 
-    input  [1:0]   sda_in,
-    input  [1:0]   scl_in,
-    output [1:0]   sda_out_eo,
-    output [1:0]   scl_out_eo,
+    input  [_I2C_PORT_COUNT-1:0]   sda_in,
+    input  [_I2C_PORT_COUNT-1:0]   scl_in,
+    output [_I2C_PORT_COUNT-1:0]   sda_out_eo,
+    output [_I2C_PORT_COUNT-1:0]   scl_out_eo,
 
     output [3:0]   spi_mosi,
     input  [3:0]   spi_miso,
@@ -162,10 +192,25 @@ module usdr_app_generic_us #(
 );
 
 localparam DATA_BITS = (C_DATA_WIDTH == 256) ? 5 : (C_DATA_WIDTH == 128) ? 4 : 3;
+localparam FEDATA_TX_WIDTH = DAC_CHANS * 16;
+localparam FEDATA_TX_BITS  = $clog2(FEDATA_TX_WIDTH / 8);
+
+localparam BUCKET_WIDTH = (C_DATA_WIDTH == 256) ? 128 : C_DATA_WIDTH;
+localparam BUCKET_BITS  = $clog2(BUCKET_WIDTH / 8);
+localparam BUCKET_KEEP  = BUCKET_WIDTH / 32;
+
 wire tran_usb_active = USB2_PRESENT && usb_bus_active;
 
-wire adc_rst = (USE_EXT_ADC_CLK) ? 1'b0        : hrst;
+// if hclk != pclk ADC automatically switches to ASYNC mode
+wire adc_rst = (USE_EXT_ADC_CLK) ? adc_rst_ext : hrst;
 wire adc_clk = (USE_EXT_ADC_CLK) ? adc_clk_ext : hclk;
+localparam ADC_ASYNC_CLK = (HUL_BUS_SPEED != PUL_BUS_SPEED) || USE_EXT_ADC_CLK;
+
+// pclk is default clock for FE ?  todo the same as ADC
+wire dac_clk    = (USE_EXT_DAC_CLK) ? dac_clk_ext : hclk;
+wire dac_rst_fe = (USE_EXT_DAC_CLK) ? dac_rst_ext : hclk;
+localparam DAC_ASYNC_CLK = (HUL_BUS_SPEED != PUL_BUS_SPEED) || USE_EXT_DAC_CLK;
+
 
 /////////////////////////////////////
 // Register map
@@ -191,14 +236,16 @@ localparam IGP_ADDR_BITS =
 
 ///////////////////////////////////////
 // RQ-interface
-`DEFINE_AXIS_RVDLKU_PORT(pclk_axis_rq_event_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_RQ_TUSER_WIDTH);     // MemWr
 `DEFINE_AXIS_RVDLKU_PORT(hclk_axis_rq_rxdma_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_RQ_TUSER_WIDTH);     // MemWr
 `DEFINE_AXIS_RVDLKU_PORT(hclk_axis_rq_txdma_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_RQ_TUSER_WIDTH);     // MemRd posted
 
-`DEFINE_AXIS_RVDLKU_PORT(hclk_axis_rq_event_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_RQ_TUSER_WIDTH);     // MemWr
+`DEFINE_AXIS_RVDLKU_PORT(pclk_axis_rq_event_t,      BUCKET_WIDTH, BUCKET_KEEP, AXI4_RQ_TUSER_WIDTH);     // MemWr
+`DEFINE_AXIS_RVDLKU_PORT(hclk_axis_rq_event_t,      BUCKET_WIDTH, BUCKET_KEEP, AXI4_RQ_TUSER_WIDTH);     // MemWr
+`DEFINE_AXIS_RVDLKU_PORT(hclk_axis_rq_event_exp_t , BUCKET_WIDTH, BUCKET_KEEP, AXI4_RQ_TUSER_WIDTH);     // MemWr
+`DEFINE_AXIS_RVDLKU_PORT(hclk_axis_rq_event_comb_t, C_DATA_WIDTH, KEEP_WIDTH,  AXI4_RQ_TUSER_WIDTH);     // MemWr
 
 axis_opt_cc_fifo #(
-  .WIDTH(C_DATA_WIDTH + KEEP_WIDTH + 1),
+  .WIDTH(BUCKET_WIDTH + BUCKET_KEEP + 1),
   .CLK_CC(PUL_BUS_SPEED != HUL_BUS_SPEED)
 ) axis_rq_event_p_to_h (
   .rx_clk(pclk),
@@ -215,21 +262,130 @@ axis_opt_cc_fifo #(
   .m_tx_tvalid(hclk_axis_rq_event_tvalid),
   .m_tx_tready(hclk_axis_rq_event_tready)
 );
-assign hclk_axis_rq_event_tuser = 12'h0ff;
 
-axis_mux #(.DATA_WIDTH(C_DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .PORTS(3)) axis_mux(
+axis_fifo_pkt #(
+  .WIDTH(BUCKET_WIDTH + BUCKET_KEEP),
+  .PASSTHROUGH(!COLLAPSE_RQ_EVENT),
+  .DEEP(16)
+) axis_rq_event_comb (
+  .clk(hclk),
+  .rst(hrst),
+
+  .s_rx_tdata({hclk_axis_rq_event_tkeep, hclk_axis_rq_event_tdata}),
+  .s_rx_tvalid(hclk_axis_rq_event_tvalid),
+  .s_rx_tready(hclk_axis_rq_event_tready),
+  .s_rx_tlast(hclk_axis_rq_event_tlast),
+
+  .m_tx_tdata({hclk_axis_rq_event_exp_tkeep, hclk_axis_rq_event_exp_tdata}),
+  .m_tx_tvalid(hclk_axis_rq_event_exp_tvalid),
+  .m_tx_tready(hclk_axis_rq_event_exp_tready),
+  .m_tx_tlast(hclk_axis_rq_event_exp_tlast)
+);
+
+// Fixup for natural aligment for 256 bit mode!
+assign hclk_axis_rq_event_exp_tready  = hclk_axis_rq_event_comb_tready;
+assign hclk_axis_rq_event_comb_tvalid = hclk_axis_rq_event_exp_tvalid;
+assign hclk_axis_rq_event_comb_tlast  = hclk_axis_rq_event_exp_tlast;
+
+`ifdef FULLY_COMPATIBLE_256
+wire a_sw;
+assign hclk_axis_rq_event_comb_tdata  = (C_DATA_WIDTH == 256) ? { hclk_axis_rq_event_exp_tdata, hclk_axis_rq_event_exp_tdata } : hclk_axis_rq_event_exp_tdata;
+assign hclk_axis_rq_event_comb_tkeep  = (C_DATA_WIDTH == 256) ? ((hclk_axis_rq_event_exp_tlast && !a_sw) ? 8'h0f : 8'hff)      : hclk_axis_rq_event_exp_tkeep;
+assign hclk_axis_rq_event_comb_tuser  = (C_DATA_WIDTH == 256) ? ({1'b0, hclk_axis_rq_event_exp_tdata[4], 10'h0ff }) : 12'h0ff; // Sampled at SOP
+
+generate
+if (C_DATA_WIDTH == 256) begin
+    reg a_sw_r;
+    always @(posedge hclk) begin
+        if (hclk_axis_rq_event_exp_tvalid && hclk_axis_rq_event_exp_tready && !hclk_axis_rq_event_exp_tlast) begin
+            a_sw_r <= hclk_axis_rq_event_exp_tdata[4]; //Addr[4]
+        end
+    end
+    assign a_sw = a_sw_r;
+end
+endgenerate
+`else
+assign hclk_axis_rq_event_comb_tdata  = hclk_axis_rq_event_exp_tdata;
+assign hclk_axis_rq_event_comb_tkeep  = (C_DATA_WIDTH == 256) ? (hclk_axis_rq_event_exp_tlast ? 8'h0f : 8'hff) : hclk_axis_rq_event_exp_tkeep;
+assign hclk_axis_rq_event_comb_tuser  = 12'h0ff;
+`endif
+
+
+axis_mux #(.DATA_WIDTH(C_DATA_WIDTH), .KEEP_WIDTH(KEEP_WIDTH), .PORTS(3), .USER_WIDTH(12)) axis_mux(
     .clk(hclk),
     .rst(hrst),
 
     `AXIS_RVDLK_PORT_CONN(m_axis_t, s_axis_rq_t),
+    .m_axis_tuser(s_axis_rq_tuser[11:0]),
 
-    .sn_axis_tready({ hclk_axis_rq_rxdma_tready, hclk_axis_rq_event_tready, hclk_axis_rq_txdma_tready}),
-    .sn_axis_tdata( { hclk_axis_rq_rxdma_tdata,  hclk_axis_rq_event_tdata,  hclk_axis_rq_txdma_tdata}),
-    .sn_axis_tkeep( { hclk_axis_rq_rxdma_tkeep,  hclk_axis_rq_event_tkeep,  hclk_axis_rq_txdma_tkeep}),
-    .sn_axis_tlast( { hclk_axis_rq_rxdma_tlast,  hclk_axis_rq_event_tlast,  hclk_axis_rq_txdma_tlast}),
-    .sn_axis_tvalid({ hclk_axis_rq_rxdma_tvalid, hclk_axis_rq_event_tvalid, hclk_axis_rq_txdma_tvalid})
+    .sn_axis_tready({ hclk_axis_rq_rxdma_tready, hclk_axis_rq_event_comb_tready, hclk_axis_rq_txdma_tready}),
+    .sn_axis_tdata( { hclk_axis_rq_rxdma_tdata,  hclk_axis_rq_event_comb_tdata,  hclk_axis_rq_txdma_tdata}),
+    .sn_axis_tkeep( { hclk_axis_rq_rxdma_tkeep,  hclk_axis_rq_event_comb_tkeep,  hclk_axis_rq_txdma_tkeep}),
+    .sn_axis_tlast( { hclk_axis_rq_rxdma_tlast,  hclk_axis_rq_event_comb_tlast,  hclk_axis_rq_txdma_tlast}),
+    .sn_axis_tvalid({ hclk_axis_rq_rxdma_tvalid, hclk_axis_rq_event_comb_tvalid, hclk_axis_rq_txdma_tvalid}),
+    .sn_axis_tuser( { 12'h0ff,                   hclk_axis_rq_event_comb_tuser[11:0],  12'h0ff})
 );
-assign s_axis_rq_tuser = 12'h0ff;
+
+
+`ifdef SEQNUM_RQ
+// in US
+reg [6:0] axis_rq_tag;
+reg [6:0] processed_tag;
+reg       s_axis_rq_tsop;
+reg       s_in_packet;
+reg       s_rq_err;
+
+always @(posedge hclk) begin
+    if (hrst) begin
+        axis_rq_tag   <= 0;
+        processed_tag <= ~0;
+
+        s_axis_rq_tsop <= 1'b1;
+        s_in_packet <= 0;
+
+        s_rq_err    <= 0;
+    end else begin
+
+        if (s_axis_rq_tvalid && s_axis_rq_tready && s_axis_rq_tsop) begin
+            axis_rq_tag <= axis_rq_tag + 1'b1;
+        end
+
+        if (s_axis_rq_tvalid && s_axis_rq_tready) begin
+            s_axis_rq_tsop <= s_axis_rq_tlast;
+            s_in_packet    <= !s_axis_rq_tlast;
+            if (s_axis_rq_tlast) begin
+                s_rq_err    <= 1'b0;
+            end
+        end
+
+        if (s_in_packet && !s_axis_rq_tvalid) begin
+            s_rq_err <= 1'b1;
+        end
+    end
+
+    if (pcieus_rq_seq_num_vld0) begin
+        processed_tag[5:0] <= pcieus_rq_seq_num0;
+
+        if (processed_tag[5] == 1'b1 && pcieus_rq_seq_num0[5] == 1'b0) begin
+            processed_tag[6] <= ~processed_tag[6];
+        end
+    end
+end
+//    input [7:0]    cfg_fc_ph,
+//    input [11:0]   cfg_fc_pd,
+wire [6:0] axis_rq_tag_diff    = 1'b1 + processed_tag - axis_rq_tag;
+wire       us_rq_busy          = axis_rq_tag_diff[6]; // || (cfg_fc_ph < 4) || (cfg_fc_pd < 32);
+
+// The user application must communicate the offset of the first Dword of the payload on the datapath
+// using the addr_offset[2:0] signal in s_axis_rq_tuser[10:8].
+assign s_axis_rq_tuser[23:12] = 0; //12'h0ff;
+assign s_axis_rq_tuser[27:24] = axis_rq_tag[3:0];
+assign s_axis_rq_tuser[59:28] = 0;
+assign s_axis_rq_tuser[61:60] = axis_rq_tag[5:4];
+`else
+assign s_axis_rq_tuser[61:12] = 0; 
+`endif
+
 
 localparam AL_BUS_WIDTH = 12;
 
@@ -240,6 +396,7 @@ localparam AL_BUS_WIDTH = 12;
 `DEFINE_ALRDWR_AXIS(cul, AL_BUS_WIDTH - 2, 32); // combined (pcie/usb2) master
 
 `DEFINE_AXIS_RVDLKU_PORT(p_axis_tx_al_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_CQ_TUSER_WIDTH);
+`DEFINE_AXIS_RVDLKU_PORT(p_axis_tx_al_comb_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_CQ_TUSER_WIDTH);
 `DEFINE_AXIS_RVDLKU_PORT(p_axis_rx_al_t, C_DATA_WIDTH, KEEP_WIDTH, AXI4_CC_TUSER_WIDTH);
 
 axis_opt_cc_fifo #(
@@ -253,13 +410,34 @@ axis_opt_cc_fifo #(
   .s_rx_tvalid(m_axis_cq_tvalid),
   .s_rx_tready(m_axis_cq_tready),
 
-  .tx_clk(hclk),
-  .tx_rst(hrst),
+  .tx_clk(pclk),
+  .tx_rst(prst),
 
   .m_tx_tdata({p_axis_rx_al_tuser[3:0], p_axis_rx_al_tlast, p_axis_rx_al_tkeep[KEEP_WIDTH - 1:0], p_axis_rx_al_tdata }),
   .m_tx_tvalid(p_axis_rx_al_tvalid),
   .m_tx_tready(p_axis_rx_al_tready)
 );
+
+// TODO: combine fifo_pkt to cc_fifo_pkt
+axis_fifo_pkt #(
+  .WIDTH(C_DATA_WIDTH + KEEP_WIDTH),
+  .PASSTHROUGH(!COLLAPSE_CC_REPLY),
+  .DEEP(16)
+) axis_cc_event_p_comb (
+  .clk(pclk),
+  .rst(prst),
+
+  .s_rx_tdata({p_axis_tx_al_tkeep, p_axis_tx_al_tdata}),
+  .s_rx_tvalid(p_axis_tx_al_tvalid),
+  .s_rx_tready(p_axis_tx_al_tready),
+  .s_rx_tlast(p_axis_tx_al_tlast),
+
+  .m_tx_tdata({p_axis_tx_al_comb_tkeep, p_axis_tx_al_comb_tdata}),
+  .m_tx_tvalid(p_axis_tx_al_comb_tvalid),
+  .m_tx_tready(p_axis_tx_al_comb_tready),
+  .m_tx_tlast(p_axis_tx_al_comb_tlast)
+);
+
 
 axis_opt_cc_fifo #(
   .WIDTH(C_DATA_WIDTH + KEEP_WIDTH + 1),
@@ -268,9 +446,9 @@ axis_opt_cc_fifo #(
   .rx_clk(pclk),
   .rx_rst(prst),
 
-  .s_rx_tdata({p_axis_tx_al_tlast, p_axis_tx_al_tkeep[KEEP_WIDTH - 1:0], p_axis_tx_al_tdata}),
-  .s_rx_tvalid(p_axis_tx_al_tvalid),
-  .s_rx_tready(p_axis_tx_al_tready),
+  .s_rx_tdata({p_axis_tx_al_comb_tlast, p_axis_tx_al_comb_tkeep[KEEP_WIDTH - 1:0], p_axis_tx_al_comb_tdata}),
+  .s_rx_tvalid(p_axis_tx_al_comb_tvalid),
+  .s_rx_tready(p_axis_tx_al_comb_tready),
 
   .tx_clk(hclk),
   .tx_rst(hrst),
@@ -483,10 +661,10 @@ wire [12 * 32 - 1:0] igpi_data_ext = igpi_data;
 `CSR32_WR_NULL(26); `CSR32_RD_CONST(26, `SUBVECTOR(igpi_data_ext, 32, 10));
 `CSR32_WR_NULL(27); `CSR32_RD_CONST(27, `SUBVECTOR(igpi_data_ext, 32, 11));
 
-`CSR32_WR_NULL(28); `CSR32_RD(REG_RD_TXDMA_STAT, txdma_stat);
-`CSR32_WR_NULL(29); `CSR32_RD(REG_RD_TXDMA_STATM, txdma_statm);
-`CSR32_WR_NULL(30); `CSR32_RD(REG_RD_TXDMA_STATTS, txdma_statts);
-`CSR32_WR_NULL(31); `CSR32_RD(REG_RD_TXDMA_STAT_CPL, txdma_stat_cpl);
+`CSR32_WR(REG_WR_TXDMA_CFG0, txdma_cfg0);  `CSR32_RD(REG_RD_TXDMA_STAT, txdma_stat);
+`CSR32_WR(REG_WR_TXDMA_CFG1, txdma_cfg1);  `CSR32_RD(REG_RD_TXDMA_STATM, txdma_statm);
+`CSR32_WR(REG_WR_TXDMA_TS_HI, txdma_ts_h); `CSR32_RD(REG_RD_TXDMA_STATTS, txdma_statts);
+`CSR32_WR(REG_WR_TXDMA_TS_LO, txdma_ts_l); `CSR32_RD(REG_RD_TXDMA_STAT_CPL, txdma_stat_cpl);
 
 // CSRs [32:47]
 `CSR32_WR_NULL(32); `CSR32_RD_NULL(32);
@@ -525,8 +703,8 @@ wire [12 * 32 - 1:0] igpi_data_ext = igpi_data;
 `CSR32_WR(REG_SPI_EXT_CFG, spi_ext_cfg); `CSR32_RD_NULL(58);
 `CSR32_RDWR(REG_SPI_EXT_DATA, spi_ext);
 
-`CSR32_WR_NULL(60); `CSR32_RD_NULL(60);
-`CSR32_WR_NULL(61); `CSR32_RD_NULL(61);
+`CSR32_WR(REG_I2C2_CFG, i2c2_cfg);  `CSR32_RD_NULL(60);
+`CSR32_RDWR(REG_I2C2,  i2c2);
 `CSR32_WR_NULL(62); `CSR32_RD_NULL(62);
 `CSR32_WR_NULL(63); `CSR32_RD_NULL(63);
 
@@ -543,6 +721,7 @@ assign axis_rd_gpi_valid = 1'b1;
 `DEFINE_AXIS_RV_PORT(axis_int_spi2_);
 `DEFINE_AXIS_RV_PORT(axis_int_spi3_);
 `DEFINE_AXIS_RV_PORT(axis_int_spi_ext_);
+`DEFINE_AXIS_RV_PORT(axis_int_i2c2_);
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 // I2C
@@ -558,15 +737,54 @@ axis_i2c_dme_wrapper  #(
 
     .addr_lut(m2pcie_i2c_lut),
 
-    .sda_in(sda_in),
-    .scl_in(scl_in),
-    .sda_out_eo(sda_out_eo),
-    .scl_out_eo(scl_out_eo),
+    .sda_in(sda_in[1:0]),
+    .scl_in(scl_in[1:0]),
+    .sda_out_eo(sda_out_eo[1:0]),
+    .scl_out_eo(scl_out_eo[1:0]),
 
     `AXIS_RVD_PORT_CONN(s_cmd_, axis_wr_i2c_),
     `AXIS_RVD_PORT_CONN(m_rb_, axis_rd_i2c_),
     `AXIS_RV_PORT_CONN(m_int_, axis_int_i2c_)
 );
+
+assign axis_wr_i2c2_cfg_ready = 1'b1;
+
+generate
+if (I2C_COUNT > 1) begin
+    reg [31:0]  m2pcie_i2c2_lut;
+
+    axis_i2c_dme_wrapper  #(
+        .I2C_SPEED(I2C_SPEED),
+        .BUS_SPEED(PUL_BUS_SPEED),
+        .CLOCK_STRETCHING(I2C_CLOCK_STRETCHING)
+    ) axis_i2c2_dme_wrapper (
+        .rst(prst),
+        .clk(pclk),
+
+        .addr_lut(m2pcie_i2c2_lut),
+
+        .sda_in(sda_in[3:2]),
+        .scl_in(scl_in[3:2]),
+        .sda_out_eo(sda_out_eo[3:2]),
+        .scl_out_eo(scl_out_eo[3:2]),
+
+        `AXIS_RVD_PORT_CONN(s_cmd_, axis_wr_i2c2_),
+        `AXIS_RVD_PORT_CONN(m_rb_, axis_rd_i2c2_),
+        `AXIS_RV_PORT_CONN(m_int_, axis_int_i2c2_)
+    );
+
+    always @(posedge pclk) begin
+        if (axis_wr_i2c2_cfg_valid && axis_wr_i2c2_cfg_ready) begin
+            m2pcie_i2c2_lut <= axis_wr_i2c2_cfg_data;
+        end
+    end
+
+end else begin
+    assign axis_wr_i2c2_ready = 1'b1;
+    assign axis_rd_i2c2_valid = 1'b1;
+    assign axis_int_i2c2_valid = 1'b0;
+end
+endgenerate
 
 /////////////////////////////////////////////////////////////////////////////////////////////
 // SPI
@@ -619,24 +837,35 @@ endgenerate
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // AUX bus
 localparam RXFE_ADDR_BITS = 3;
+localparam TXFE_ADDR_BITS = 3;
+
 reg [1:0]                  bus_selector;
 
+// RX DMA configuration (should be isolated!)
 reg [7:0]                  m2_al_waddr;
 wire [31:0]                m2_al_wdata  = axis_wr_mbus2_data_data;
 wire                       m2_al_wvalid = axis_wr_mbus2_data_valid && (bus_selector == 2'b00);
 wire                       m2_al_wready;
 
+// TX DMA configuration (should be isolated!)
 reg [7:0]                  m3_al_waddr;
 wire [31:0]                m3_al_wdata  = axis_wr_mbus2_data_data;
 wire                       m3_al_wvalid = axis_wr_mbus2_data_valid && (bus_selector == 2'b10);
 wire                       m3_al_wready;
 
+// RX FE registers
 reg [RXFE_ADDR_BITS-1:0]   rxfe0_waddr;
 wire [31:0]                rxfe0_wdata  = axis_wr_mbus2_data_data;
 wire                       rxfe0_wvalid = axis_wr_mbus2_data_valid && (bus_selector == 2'b01);
 wire                       rxfe0_wready;
 
-assign axis_wr_mbus2_data_ready = (bus_selector == 2'b10) ? m3_al_wready : (bus_selector == 2'b01) ? rxfe0_wready : m2_al_wready;
+// RX FE registers
+reg [TXFE_ADDR_BITS-1:0]   txfe0_waddr;
+wire [31:0]                txfe0_wdata  = axis_wr_mbus2_data_data;
+wire                       txfe0_wvalid = axis_wr_mbus2_data_valid && (bus_selector == 2'b11);
+wire                       txfe0_wready;
+
+assign axis_wr_mbus2_data_ready = (bus_selector == 2'b11) ? txfe0_wready : (bus_selector == 2'b10) ? m3_al_wready : (bus_selector == 2'b01) ? rxfe0_wready : m2_al_wready;
 assign axis_wr_mbus2_addr_ready = 1'b1;
 
 always @(posedge pclk) begin
@@ -647,7 +876,9 @@ always @(posedge pclk) begin
   end else if (axis_wr_mbus2_addr_valid && ~axis_wr_mbus2_addr_data[31]) begin
     bus_selector <= axis_wr_mbus2_addr_data[9:8];
 
-    if (axis_wr_mbus2_addr_data[9:8] == 2'b01)
+    if (axis_wr_mbus2_addr_data[9:8] == 2'b11)
+      txfe0_waddr   <= axis_wr_mbus2_addr_data[TXFE_ADDR_BITS-1:0];
+    else if (axis_wr_mbus2_addr_data[9:8] == 2'b01)
       rxfe0_waddr   <= axis_wr_mbus2_addr_data[RXFE_ADDR_BITS-1:0];
     else if (axis_wr_mbus2_addr_data[9:8] == 2'b10)
       m3_al_waddr <= axis_wr_mbus2_addr_data;
@@ -686,9 +917,9 @@ always @(posedge pclk) begin
 end
 
 // interrupts
-localparam INT_COUNT      = 8;
+localparam INT_COUNT      = (I2C_COUNT > 1) ? 16 : 8;
 
-localparam INT_COUNT_BITS = 3;
+localparam INT_COUNT_BITS = (I2C_COUNT > 1) ? 4 : 3;
 localparam INT_PUSH_BITS  = 2;
 
 wire [INT_COUNT-1:0] int_valid;
@@ -726,6 +957,17 @@ assign axis_int_i2c_ready = int_ready[6];
 
 assign int_valid[7] = axis_int_spi_ext_valid;
 assign axis_int_spi_ext_ready = int_ready[7];
+
+generate
+if (I2C_COUNT > 1) begin
+assign int_valid[8] = axis_int_i2c2_valid;
+assign axis_int_i2c2_ready = int_ready[8];
+
+assign int_valid[15:9] = 0;
+
+assign evntproc_ready[15:8] = ~0;
+end
+endgenerate
 
 assign evntproc_ready[7:1] = ~0;
 assign evntproc_ready[0]   =  dmarx_stat_cnf_ready;
@@ -791,9 +1033,9 @@ event_fifo_gen #(
     .ADDR_WIDTH(USER_CSR_BITS + 2),
     .DATA_WIDTH(32),
     .AUX_WIDTH(INT_COUNT_BITS + INT_PUSH_BITS),
-    //                   spi_e      i2c     spi3     spi2     spi1     spi0     tx0     rx0
-    .A_EVENT_ADDRS(256'h0000003B_00000001_0000000E_0000000D_00000003_00000002_0000001C_00000004),
-    .A_EVENT_LEN(  256'h00000000_00000000_00000000_00000000_00000000_00000000_00000002_00000002)
+    //                     i2c2    spi_e      i2c     spi3     spi2     spi1     spi0     tx0     rx0
+    .A_EVENT_ADDRS(288'h0000003D_0000003B_00000001_0000000E_0000000D_00000003_00000002_0000001C_00000004),
+    .A_EVENT_LEN(  288'h00000000_00000000_00000000_00000000_00000000_00000000_00000000_00000002_00000002)
 ) event_fifo_gen (
     .clk(pclk),
     .rst(prst),
@@ -830,7 +1072,7 @@ pcie_notification_gen_us #(
     .ORIG_NUM_BITS(INT_COUNT_BITS),
     .BUCKET_BITS(INT_PUSH_BITS),
     .ULTRA_SCALE(ULTRA_SCALE),
-    .DATA_BITS(DATA_BITS)
+    .DATA_BITS(BUCKET_BITS)
 ) pcie_gen (
     .clk(pclk),
     .rst(prst),
@@ -895,14 +1137,14 @@ assign axis_rd_interrupts_data  = 32'h0;
 // ==========================================================================
 
 localparam RAM_RX_ADDR_W = 16;
-localparam TS_BITS       = 48;
 localparam WIDTH_RX      = C_DATA_WIDTH;
-localparam WIDTH_FE_RX   = 64; //TODO: Update FE for multi-width configuration
+localparam WIDTH_FE_RX   = ADC_CHANS * ADC_WIDTH;
+localparam ADC_ADDR_BITS = $clog2(WIDTH_FE_RX / 8);
 
-wire                               fe_rxdma_ten;
-wire [RAM_RX_ADDR_W-1:DATA_BITS-1] fe_rxdma_taddr;
-wire [WIDTH_FE_RX-1:0]             fe_rxdma_tdata_wr;
-wire [WIDTH_FE_RX/8-1:0]           fe_rxdma_twbe;
+wire                                 fe_rxdma_ten;
+wire [RAM_RX_ADDR_W-1:ADC_ADDR_BITS] fe_rxdma_taddr;
+wire [WIDTH_FE_RX-1:0]               fe_rxdma_tdata_wr;
+wire [WIDTH_FE_RX/8-1:0]             fe_rxdma_twbe;
 
 wire [WIDTH_RX/8-1:0]              rxdma_bram_wbe = 0;
 wire [WIDTH_RX-1:0]                rxdma_bram_data_wr = 0;
@@ -912,42 +1154,63 @@ wire                               rxdma_bram_en;
 
 generate
 if (ULTRA_SCALE) begin
-// 64kB, direct map
-blk_mem_gen_nrx_128 fifo_mem_rx (
-    .clka(hclk),
-    .rsta(hrst),
-    .ena(rxdma_bram_en),
-    .wea(rxdma_bram_wbe),
-    .addra(rxdma_bram_addr),
-    .dina(rxdma_bram_data_wr),
-    .douta(rxdma_bram_data_rd),
+    if (RAM_RX_ADDR_W == 16 && WIDTH_RX == 128 && WIDTH_FE_RX == 128) begin
+        // 64kB, direct map
+        blk_mem_gen_nrx_128_128 fifo_mem_rx (
+            .clka(hclk),
+            .rsta(hrst),
+            .ena(rxdma_bram_en),
+            .wea(rxdma_bram_wbe),
+            .addra(rxdma_bram_addr),
+            .dina(rxdma_bram_data_wr),
+            .douta(rxdma_bram_data_rd),
 
-    .clkb(hclk),
-    .rstb(hrst),
-    .enb(fe_rxdma_ten),
-    .web(fe_rxdma_twbe),
-    .addrb(fe_rxdma_taddr),
-    .dinb(fe_rxdma_tdata_wr),
-    .doutb()
-);
+            .clkb(adc_clk),
+            .rstb(adc_rst),
+            .enb(fe_rxdma_ten),
+            .web(fe_rxdma_twbe),
+            .addrb(fe_rxdma_taddr),
+            .dinb(fe_rxdma_tdata_wr),
+            .doutb()
+        );
+    end else if (RAM_RX_ADDR_W == 16 && WIDTH_RX == 256 && WIDTH_FE_RX == 128) begin
+        // 64kB, direct map
+        blk_mem_gen_nrx_256_128 fifo_mem_rx (
+            .clka(hclk),
+            .rsta(hrst),
+            .ena(rxdma_bram_en),
+            .wea(rxdma_bram_wbe),
+            .addra(rxdma_bram_addr),
+            .dina(rxdma_bram_data_wr),
+            .douta(rxdma_bram_data_rd),
+
+            .clkb(adc_clk),
+            .rstb(adc_rst),
+            .enb(fe_rxdma_ten),
+            .web(fe_rxdma_twbe),
+            .addrb(fe_rxdma_taddr),
+            .dinb(fe_rxdma_tdata_wr),
+            .doutb()
+        );
+    end
 end else begin
-blk_mem_gen_nrx fifo_mem_rx (
-    .clka(hclk),
-    .rsta(hrst),
-    .ena(rxdma_bram_en),
-    .wea(rxdma_bram_wbe),
-    .addra(rxdma_bram_addr),
-    .dina(rxdma_bram_data_wr),
-    .douta(rxdma_bram_data_rd),
+    blk_mem_gen_nrx fifo_mem_rx (
+        .clka(hclk),
+        .rsta(hrst),
+        .ena(rxdma_bram_en),
+        .wea(rxdma_bram_wbe),
+        .addra(rxdma_bram_addr),
+        .dina(rxdma_bram_data_wr),
+        .douta(rxdma_bram_data_rd),
 
-    .clkb(adc_clk),
-    .rstb(adc_rst),
-    .enb(fe_rxdma_ten),
-    .web(fe_rxdma_twbe),
-    .addrb(fe_rxdma_taddr),
-    .dinb(fe_rxdma_tdata_wr),
-    .doutb()
-);
+        .clkb(adc_clk),
+        .rstb(adc_rst),
+        .enb(fe_rxdma_ten),
+        .web(fe_rxdma_twbe),
+        .addrb(fe_rxdma_taddr),
+        .dinb(fe_rxdma_tdata_wr),
+        .doutb()
+    );
 end
 endgenerate
 
@@ -1046,6 +1309,7 @@ al_ram_to_pcie_memwr #(
     .cfg_pcie_attr(/*cfg_pcie_dma_rx_attr*/ 2'b00),
     .cfg_pcie_reqid(cfg_completer_id),
     .pcie7s_tx_buf_av(pcie7s_tx_buf_av),
+    .pcieus_tx_busy(us_rq_busy),
 
     // AXIs PCIe RQ
     `AXIS_RVDLKU_PORT_CONN(m_axis_tx_t, hclk_axis_rq_rxdma_t),
@@ -1075,10 +1339,15 @@ always @(posedge adc_clk) begin
 end
 //
 
-fe_simple_rx #(
+`ifndef FE_RX_IPCORE
+`define FE_RX_IPCORE fe_simple_rx
+`endif
+
+`FE_RX_IPCORE #(
     .BUFFER_SIZE_ADDR(RAM_RX_ADDR_W),
-    .DATA_WIDTH(16),
-    .ASYNC_BURST_CLOCK((HUL_BUS_SPEED != PUL_BUS_SPEED) || USE_EXT_ADC_CLK)
+    .DATA_WIDTH(ADC_WIDTH),
+    .RAW_CHANS(ADC_CHANS),
+    .ASYNC_BURST_CLOCK(ADC_ASYNC_CLK)
 ) fe_simple_rx (
     .clk(adc_clk),
     .rst(adc_rst),
@@ -1086,7 +1355,7 @@ fe_simple_rx #(
     .s_in_data(adc_realigned),
     .s_in_valid(adc_fifo_valid),
     .s_in_ready(rx_ready),
-    .o_enable(),
+    .o_enable(adc_enable),
     .o_tstp(),
     .o_ch_enabled(adc_ch_enable),
     .o_running(rx_streaming),
@@ -1184,11 +1453,12 @@ wire tx_streamingready;
 wire [63:0] fetx_stat;
 
 localparam RAM_TX_ADDR_W     = 17;
-localparam WIDTH_TX          = 48;
-localparam TX_TIMESTAMP_BITS = 49; // 48 bits + NOTS flag
+
+localparam TX_TIMESTAMP_BITS = TX_EX_CORE ? 64 : 49; // 48 bits + NOTS flag
 localparam TX_RAM_ADDR_WIDTH = RAM_TX_ADDR_W;
-localparam TX_SAMPLES_WIDTH  = TX_RAM_ADDR_WIDTH - 1;
-localparam TX_FE_DESCR_WIDTH = TX_TIMESTAMP_BITS + TX_SAMPLES_WIDTH + (TX_RAM_ADDR_WIDTH - DATA_BITS);
+localparam TX_SAMPLES_WIDTH  = (TX_EX_CORE) ? TX_RAM_ADDR_WIDTH : TX_RAM_ADDR_WIDTH - 1;
+localparam TX_FE_DESCR_WIDTH = TX_TIMESTAMP_BITS + TX_SAMPLES_WIDTH + (TX_RAM_ADDR_WIDTH - DATA_BITS) + 2 * TX_EX_CORE;
+localparam STAT_CNTR_WIDTH   = 8;
 
 `DEFINE_AXIS_RVD_PORT(txusb_descr_, TX_FE_DESCR_WIDTH);
 
@@ -1201,7 +1471,7 @@ wire  [TX_TIMESTAMP_BITS - 1:0]   fedma_ts;
 wire  [TX_RAM_ADDR_WIDTH:8]       fedma_ram_addr;
 
 wire                              txdma_nactive;
-wire                              fetx_cfg_format;
+wire  [1:0]                       fetx_cfg_format;
 generate
 if (NO_TX) begin
 
@@ -1227,12 +1497,18 @@ assign txdma_nactive = 1'b1;
 assign m_axis_rc_tready = 1'b1;
 
 assign m3_al_wready = 1'b1;
+assign txfe0_wready = 1'b1;
 
 assign sysref_gen = 1'b0;
 
 assign axis_wr_txdma_cnf_len_ready = 1'b1;
 assign axis_wr_txdma_cnf_tm_ready = 1'b1;
 assign axis_wr_txdma_controlcomb_ready = 1'b1;
+
+assign axis_wr_txdma_cfg0_ready = 1'b1;
+assign axis_wr_txdma_cfg1_ready = 1'b1;
+assign axis_wr_txdma_ts_h_ready = 1'b1;
+assign axis_wr_txdma_ts_l_ready = 1'b1;
 
 assign axis_rd_txdma_stat_valid = 1'b1;
 assign axis_rd_txdma_statm_valid = 1'b1;
@@ -1260,6 +1536,51 @@ wire [RAM_TX_ADDR_W-1:DATA_BITS]  txs_bram_addr  = tran_usb_active ? usb_bram_ad
 wire [C_DATA_WIDTH-1:0]           txs_bram_wdata = tran_usb_active ? usb_bram_wdata : txdma_bram_wdata;
 wire [C_DATA_WIDTH/8-1:0]         txs_bram_wbe   = tran_usb_active ? usb_bram_wbe   : txdma_bram_wbe;
 
+wire                              fe_aux_tvalid; // = 1'b0;
+
+wire                                   fe_txdma_ten;
+wire [RAM_TX_ADDR_W-1:FEDATA_TX_BITS]  fe_txdma_taddr;
+wire [FEDATA_TX_WIDTH-1:0]             fe_txdma_tdata_rd_ext;
+
+if (ULTRA_SCALE) begin
+    if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 128 && FEDATA_TX_WIDTH == 128) begin
+        // 128kB of RAM
+        blk_mem_gen_ntx_128_128_2 fifo_mem_tx (
+            .clka(hclk),
+            .ena(    txs_bram_en),
+            .wea(    |txs_bram_wbe),
+            .addra(  txs_bram_addr),
+            .dina(   txs_bram_wdata),
+            .douta(),
+
+            .clkb(dac_clk),
+            .enb(fe_txdma_ten),
+            .web(0),
+            .addrb(fe_txdma_taddr),
+            .dinb(0),
+            .doutb(fe_txdma_tdata_rd_ext)
+        );
+    end else if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 256 && FEDATA_TX_WIDTH == 128) begin
+        blk_mem_gen_ntx_256_128_2 fifo_mem_tx (
+            .clka(hclk),
+            .ena(    txs_bram_en),
+            .wea(    |txs_bram_wbe),
+            .addra(  txs_bram_addr),
+            .dina(   txs_bram_wdata),
+            .douta(),
+
+            .clkb(dac_clk),
+            .enb(fe_txdma_ten),
+            .web(0),
+            .addrb(fe_txdma_taddr),
+            .dinb(0),
+            .doutb(fe_txdma_tdata_rd_ext)
+        );
+    end
+end else begin
+
+localparam WIDTH_TX = 48;
+
 // 8b->6b mapping
 wire [5:0]                txs_bram_wbe_mapped;
 wire [WIDTH_TX-1:0]       txs_bram_wdata_mapped;
@@ -1282,11 +1603,10 @@ assign txs_bram_wbe_mapped = {
 };
 
 // DSP read channel
-wire                     fe_txdma_ten;
-wire [RAM_TX_ADDR_W-1:3] fe_txdma_taddr;
+// wire                     fe_txdma_ten;
+// wire [RAM_TX_ADDR_W-1:3] fe_txdma_taddr;
 wire [WIDTH_TX-1:0]      fe_txdma_tdata_rd_r;
-
-wire [63:0]              fe_txdma_tdata_rd_ext = {
+assign                   fe_txdma_tdata_rd_ext = {
     fe_txdma_tdata_rd_r[47:36], 4'h0,
     fe_txdma_tdata_rd_r[35:24], 4'h0,
     fe_txdma_tdata_rd_r[23:12], 4'h0,
@@ -1294,17 +1614,17 @@ wire [63:0]              fe_txdma_tdata_rd_ext = {
 };
 
 // DSP write channel
-wire                     fe_aux_tvalid; // = 1'b0;
-wire                     fe_aux_tready;
-wire [RAM_TX_ADDR_W-1:3] fe_aux_taddr;
-wire [WIDTH_TX-1:0]      fe_aux_tdata;
-wire [5:0]               fe_aux_tkeep;
+wire                             fe_aux_tvalid; // = 1'b0;
+wire                             fe_aux_tready;
+wire [RAM_TX_ADDR_W-1:3]         fe_aux_taddr;
+wire [WIDTH_TX-1:0]              fe_aux_tdata;
+wire [5:0]                       fe_aux_tkeep;
 
 //Multiplexed access to TX ram
-wire                      ntx_fifo_enb  = fe_txdma_ten || (fe_aux_tvalid && fe_aux_tready);
-wire [5:0]                ntx_fifo_web  = (fe_aux_tvalid && fe_aux_tready) ? fe_aux_tkeep : 6'h00;
-wire [RAM_TX_ADDR_W-1:3]  ntx_fifo_addr = (fe_aux_tvalid && fe_aux_tready) ? fe_aux_taddr : fe_txdma_taddr;
-assign                    fe_aux_tready = ~fe_txdma_ten;
+wire                              ntx_fifo_enb  = fe_txdma_ten || (fe_aux_tvalid && fe_aux_tready);
+wire [5:0]                        ntx_fifo_web  = (fe_aux_tvalid && fe_aux_tready) ? fe_aux_tkeep : 6'h00;
+wire [RAM_TX_ADDR_W-1:3]          ntx_fifo_addr = (fe_aux_tvalid && fe_aux_tready) ? fe_aux_taddr : fe_txdma_taddr;
+assign                            fe_aux_tready = ~fe_txdma_ten;
 
 
 // 96kB of RAM mapped to 128kB space, 8b -> 6b on the fly translation
@@ -1326,6 +1646,10 @@ blk_mem_gen_ntx fifo_mem_tx (
     .doutb(fe_txdma_tdata_rd_r)
 );
 
+end
+
+
+
 //
 // fe_simple_tx          | Transmition front end      | TXCLK/PCLK
 // dma_tx_wrapper        | Wrapper DMA                | PCLK
@@ -1338,8 +1662,10 @@ blk_mem_gen_ntx fifo_mem_tx (
 localparam PCIE_TAG_BITS     = 5;
 localparam TX_STAT_FE_WIDTH  = 20;
 localparam TX_BUS_ADDR_WIDTH = 32;
+localparam DAC_CMD_WIDTH     = 3;
+localparam TX_FIFO_ID        = DAC_CMD_WIDTH + FEDATA_TX_BITS + 1;
 
-`DEFINE_ALRDI_AXIS(tx_fifo, TX_RAM_ADDR_WIDTH - DATA_BITS, C_DATA_WIDTH, DATA_BITS);
+`DEFINE_ALRDI_AXIS(tx_fifo, TX_RAM_ADDR_WIDTH - FEDATA_TX_BITS, FEDATA_TX_WIDTH, TX_FIFO_ID);
 
 wire [TX_RAM_ADDR_WIDTH-1:DATA_BITS] tcq_laddr;
 wire [TX_BUS_ADDR_WIDTH-1:DATA_BITS] tcq_raddr;
@@ -1354,7 +1680,7 @@ wire [PCIE_TAG_BITS-1:0]             tcq_ctag;
 
 wire                                 txdma_bram_tvalid;
 assign                               txdma_bram_en  = txdma_bram_tvalid;
-assign                               txdma_bram_wbe = {8{txdma_bram_tvalid}};
+assign                               txdma_bram_wbe = {(C_DATA_WIDTH/8){txdma_bram_tvalid}};
 
 wire [1:0]                           fetx_cfg_mute;
 wire                                 fetx_cfg_swap;
@@ -1369,28 +1695,34 @@ wire                                 proc_idx_ready;
 wire                                 dacclk_fe_underrun;
 wire  [TX_STAT_FE_WIDTH-1:0]         txdma_fe_underruns;
 
-wire                                 dac_frame;
+//wire                                 dac_frame;
 wire                                 dac_sync;
 wire                                 dac_rst;
 wire                                 tx_timer_en;
 
 assign                               tx_streaming = !dac_rst;
 
-synchronizer #( /*.ASYNC_RESET(1),*/ .INIT(1)) tx_dmaen_to_dacclk_rst (
-  .clk(dac_clk),
-  .rst(prst /*1'b0*/),
-  .a_in(txdma_nactive),
-  .s_out(dac_rst)
-);
 
-synchronizer #(/*.ASYNC_RESET(1),*/ .INIT(0)) tx_timer_to_dacclk_sync (
-  .clk(dac_clk),
-  .rst(dac_rst),
-  .a_in(tx_timer_en),
-  .s_out(dac_sync)
-);
+if (DAC_ASYNC_CLK) begin
+    synchronizer #(.INIT(1)) tx_dmaen_to_dacclk_rst (
+      .clk(dac_clk),
+      .rst(prst /*1'b0*/),
+      .a_in(txdma_nactive),
+      .s_out(dac_rst)
+    );
 
-axis_opt_pipeline #(.WIDTH(DATA_BITS)) tx_ram_p (
+    synchronizer #(.INIT(0)) tx_timer_to_dacclk_sync (
+      .clk(dac_clk),
+      .rst(dac_rst),
+      .a_in(tx_timer_en),
+      .s_out(dac_sync)
+    );
+end else begin
+    assign dac_rst  = txdma_nactive;
+    assign dac_sync = tx_timer_en;
+end
+
+axis_opt_pipeline #(.WIDTH(TX_FIFO_ID), .PIPE_PASSTHROUGH(TX_EX_CORE)) tx_ram_p (
   .clk(dac_clk),
   .rst(dac_rst),
 
@@ -1408,8 +1740,7 @@ assign tx_fifo_rdata  = fe_txdma_tdata_rd_ext;
 
 cc_counter #(
    .WIDTH(TX_STAT_FE_WIDTH),
-   .GRAY_BITS(6) /*,
-   .ASYNC_RESET(1)*/
+   .GRAY_BITS(4)
 ) cc_tx_timer (
    .in_clk(dac_clk),
    .in_rst(dac_rst),
@@ -1421,17 +1752,30 @@ cc_counter #(
    .out_counter(txdma_fe_underruns)
 );
 
-fe_simple_tx #(
+`ifndef FE_TX_IPCORE
+`define FE_TX_IPCORE fe_simple_tx
+`endif
+
+`FE_TX_IPCORE #(
+    .DESCR_DATA_BITS(DATA_BITS),
     .RAM_ADDR_WIDTH(TX_RAM_ADDR_WIDTH),
     .TIMESTAMP_BITS(TX_TIMESTAMP_BITS),
-    .DATA_BITS(DATA_BITS),
+    .DATA_BITS(FEDATA_TX_BITS),
     .SAMPLES_WIDTH(TX_SAMPLES_WIDTH),
     .FE_DESCR_WIDTH(TX_FE_DESCR_WIDTH),
     .FRAME_LENGTH(TX_FRAME_LENGTH), //Extra samples to flush beforehand to compensate distribution delay through extra pipeline stages
-    .INITIAL_TS_COMP(TX_INITIAL_TS_COMP)
+    .INITIAL_TS_COMP(TX_INITIAL_TS_COMP),
+    .ASYNC_CLK(DAC_ASYNC_CLK),
+    .SUPPORT_8CH(TX_SUPPORT_8CH),
+    .SUPPORT_4CH(TX_SUPPORT_4CH),
+    .RAW_CHANS(DAC_CHANS),
+    .ULTRA_SCALE(ULTRA_SCALE),
+    .DAC_CMD_WIDTH(DAC_CMD_WIDTH)
 ) fe_simple_tx(
     .clk(dac_clk),
     .rst(dac_rst),
+
+    .rst_fe(dac_rst_fe),
 
     `AXIS_RVD_PORT_CONN(s_descr_, txfe_descr_),
 
@@ -1454,6 +1798,10 @@ fe_simple_tx #(
 
     `AXIS_ALRDI_CONNECT(m_fifo, tx_fifo),
 
+    .s_fe_cmd_data(txfe0_wdata),
+    .s_fe_cmd_valid(txfe0_wvalid && (txfe0_waddr == 0)),
+    .s_fe_cmd_ready(txfe0_wready),
+
     // DATA to DACs
     .dac_data(dac_realigned),
     .dac_valid(dac_fifo_valid),
@@ -1467,21 +1815,31 @@ assign txcomb_descr_valid = (tran_usb_active) ? txusb_descr_valid : txdma_descr_
 assign txusb_descr_ready  = tran_usb_active && txcomb_descr_ready;
 assign txdma_descr_ready  = !tran_usb_active && txcomb_descr_ready;
 
-axis_opt_cc_fifo #(
-  .WIDTH(TX_FE_DESCR_WIDTH),
-  .CLK_CC(1'b1)
-) axis_txfedescr_pclk_dacclk (
-  .rx_clk(pclk),
-  .rx_rst(txdma_nactive),
-  `AXIS_RVD_PORT_CONN(s_rx_t, txcomb_descr_),
+// TODO: Assume FIFO is 32 deep, put proper constant
+if (DAC_ASYNC_CLK) begin
+    axis_opt_cc_fifo #(
+      .WIDTH(TX_FE_DESCR_WIDTH),
+      .CLK_CC(1'b1)
+    ) axis_txfedescr_pclk_dacclk (
+      .rx_clk(pclk),
+      .rx_rst(txdma_nactive),
+      `AXIS_RVD_PORT_CONN(s_rx_t, txcomb_descr_),
 
-  .tx_clk(dac_clk),
-  .tx_rst(dac_rst),
-  `AXIS_RVD_PORT_CONN(m_tx_t, txfe_descr_)
-);
+      .tx_clk(dac_clk),
+      .tx_rst(dac_rst),
+      `AXIS_RVD_PORT_CONN(m_tx_t, txfe_descr_)
+    );
+end else begin
+    axis_fifo #(.WIDTH(TX_FE_DESCR_WIDTH), .DEEP(32)) axis_txfedescr_sync (
+      .clk(dac_clk),
+      .rst(dac_rst),
+      `AXIS_RVD_PORT_CONN(s_rx_t, txcomb_descr_),
+      `AXIS_RVD_PORT_CONN(m_tx_t, txfe_descr_)
+    );
+end
 
-wire [19:0] stat_cpl_nodata;
-wire        stat_notlp;
+wire [STAT_CNTR_WIDTH-1:0] stat_cpl_nodata;
+wire                       stat_notlp;
 
 pcie_rq_rc_al_mem #(
     .LOCAL_ADDR_WIDTH(TX_RAM_ADDR_WIDTH),
@@ -1491,7 +1849,8 @@ pcie_rq_rc_al_mem #(
     .DATA_BITS(DATA_BITS), // 3 - 64 bit, 4 - 128 bit, 5 - 256 bit
     .ULTRA_SCALE(ULTRA_SCALE),
     .EN64BIT(0), // for 7-Series,
-    .PCIE_TAG_BITS(5)
+    .PCIE_TAG_BITS(5),
+    .STAT_CNTR_WIDTH(STAT_CNTR_WIDTH)
 ) pcie_rq_rc_al_mem (
     .clk(hclk),
     .rst(hrst),
@@ -1523,11 +1882,14 @@ pcie_rq_rc_al_mem #(
     .m_al_wready(1'b1),
 
     .stat_notlp(stat_notlp), // There's no non-posted TLP in the fly
-    .stat_cpl_nodata(stat_cpl_nodata)
+    .stat_cpl_nodata(stat_cpl_nodata),
+
+    .extra_data( { m_axis_cq_tvalid, m_axis_cq_tready, axis_wr_txdma_cnf_tm_ready, axis_wr_txdma_cnf_tm_valid } )
 );
 
 dma_tx_wrapper #(
     .TIMESTAMP_BITS(TX_TIMESTAMP_BITS),
+    .TIMESTAMP_LATE_DISCARD(TX_EX_CORE),
     .BUS_ADDR_WIDTH(TX_BUS_ADDR_WIDTH),
     .RAM_ADDR_WIDTH(TX_RAM_ADDR_WIDTH),
     .DATA_BITS(DATA_BITS),
@@ -1535,7 +1897,11 @@ dma_tx_wrapper #(
     .SAMPLES_WIDTH(TX_SAMPLES_WIDTH),
     .FE_DESCR_WIDTH(TX_FE_DESCR_WIDTH),
     .ULTRA_SCALE(ULTRA_SCALE),
-    .STAT_FE_WIDTH(TX_STAT_FE_WIDTH)
+    .STAT_FE_WIDTH(TX_STAT_FE_WIDTH),
+    .SUPPORT_8CH(TX_SUPPORT_8CH),
+    .SUPPORT_4CH(TX_SUPPORT_4CH),
+    .TX_EX_CORE(TX_EX_CORE),
+    .STAT_CNTR_WIDTH(STAT_CNTR_WIDTH)
 ) dma_tx_wrapper (
     .clk(pclk),
     .rst(prst),
@@ -1574,8 +1940,15 @@ dma_tx_wrapper #(
 
     .cfg_max_req_sz(cfg_max_read_req_size),
 
+    // Old Control
     `AXIS_RVD_PORT_CONN(axis_cnf_len_, axis_wr_txdma_cnf_len_),
     `AXIS_RVD_PORT_CONN(axis_tm_len_,  axis_wr_txdma_cnf_tm_),
+
+    // New Control
+    `AXIS_RVD_PORT_CONN(axis_ncfg0_, axis_wr_txdma_cfg0_),
+    `AXIS_RVD_PORT_CONN(axis_ncfg1_, axis_wr_txdma_cfg1_),
+    `AXIS_RVD_PORT_CONN(axis_ntsh_,  axis_wr_txdma_ts_h_),
+    `AXIS_RVD_PORT_CONN(axis_ntsl_,  axis_wr_txdma_ts_l_),
 
     .axis_control_data(axis_wr_txdma_controlcomb_data),
     .axis_control_valid(axis_wr_txdma_controlcomb_valid && ~axis_wr_txdma_controlcomb_data[31]),

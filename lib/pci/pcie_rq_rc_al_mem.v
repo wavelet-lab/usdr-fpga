@@ -66,7 +66,9 @@ module pcie_rq_rc_al_mem #(
     input                                      m_al_wready,
 
     output                                     stat_notlp, // There's no non-posted TLP in the fly
-    output [STAT_CNTR_WIDTH-1:0]               stat_cpl_nodata
+    output [STAT_CNTR_WIDTH-1:0]               stat_cpl_nodata,
+    
+    input [3:0]                                extra_data
 );
 
 // For UltraScale use 128/256bit Address-Align mode with External Tag Management

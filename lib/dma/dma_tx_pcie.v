@@ -22,7 +22,9 @@ module dma_tx_pcie #(
     // TODO: add proper interface
     input   [RAM_ADDR_WIDTH:8]            s_consume_ram_addr,
     output                                fifo_full,
-
+    output  [RAM_ADDR_WIDTH:8]            fifo_used,
+    output  [PCIE_TAG_BITS:0]             pcie_tags_avail,
+      
     // request
     input  [RAM_ADDR_WIDTH  :DATA_BITS]   s_rq_loc_addr,
     input  [BUS_ADDR_WIDTH-1:DATA_BITS]   s_rq_bus_addr,
@@ -35,7 +37,7 @@ module dma_tx_pcie #(
     output reg [USER_TAG_BITS-1:0]        m_rc_tag,
     output reg                            m_rc_valid,
     input                                 m_rc_ready,
-
+    
     input  [2:0]                          cfg_max_req_sz,
 
     // memory op request
@@ -76,6 +78,7 @@ wire [RAM_ADDR_WIDTH:DATA_BITS]    m_tcq_laddr_e      = s_rq_loc_addr + len_requ
 wire [RAM_ADDR_WIDTH-1:8]          cfg_max_req_sz_e   = (cfg_max_req_sz_d == 0) ? 1 : (1 << (cfg_max_req_sz_d - 1));
 wire [RAM_ADDR_WIDTH:8]            loc_addr_available = s_consume_ram_addr - m_tcq_laddr_e[RAM_ADDR_WIDTH:8] - cfg_max_req_sz_e + ((1<<(RAM_ADDR_WIDTH-8)) - 1'b1);
 assign                             fifo_full          = loc_addr_available[RAM_ADDR_WIDTH];
+assign                             fifo_used          = m_tcq_laddr_e[RAM_ADDR_WIDTH:8] - s_consume_ram_addr;
 
 always @(posedge clk) begin
     if (rst) begin
@@ -115,6 +118,7 @@ tag_allocator #(.PCIE_TAG_BITS(PCIE_TAG_BITS)) tag_alloc (
 
     .core_ready(core_ready),
     .notags(),
+    .tag_fifo_used(pcie_tags_avail),
 
     .m_tag_alloc_data(m_tcq_tag),
     .m_tag_alloc_ready(s_rq_valid && s_rq_ready),
@@ -124,7 +128,6 @@ tag_allocator #(.PCIE_TAG_BITS(PCIE_TAG_BITS)) tag_alloc (
     .s_tag_free_valid(m_rc_valid && m_rc_ready),
     .s_tag_free_ready()
 );
-
 
 wire [RAM_ADDR_WIDTH-1:7] cpl_req_cnt;
 wire [RAM_ADDR_WIDTH-1:7] cpl_prc_cnt;
@@ -181,10 +184,10 @@ ram_sxp #(
 
 always @(posedge clk) begin
     if (rst) begin
-        m_rc_valid <= 1'b0;
+        m_rc_valid   <= 1'b0;
     end else begin
         if (m_rc_valid && m_rc_ready) begin
-            m_rc_valid <= 1'b0;
+            m_rc_valid   <= 1'b0;
         end
 
         if (m_tcq_cvalid && m_tcq_cready && completion_done) begin

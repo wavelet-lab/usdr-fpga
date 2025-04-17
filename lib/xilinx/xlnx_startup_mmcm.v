@@ -4,7 +4,8 @@
 //
 //
 module xlnx_startup_mmcm #(
-    parameter [0:0] PCIE_INIT_ONLY = 1'b0
+    parameter [0:0] PCIE_INIT_ONLY = 1'b0,
+    parameter [0:0] USB2_INIT_ONLY = 1'b0
 )(
     input  cfg_mclk,
     output startup_mode_pcie,
@@ -30,7 +31,7 @@ localparam [0:0]  SMODE_PCIE = 1'b0,
 
 localparam NOLOCK_BITS = 28;
 
-reg                  startup_mode = 1'b0; // 0 - PCIE; 1 - USB2
+reg                  startup_mode = (USB2_INIT_ONLY) ? 1'b1 : 1'b0; // 0 - PCIE; 1 - USB2
 reg                  pipe_mmcm_rst_n_r = 1'b1;
 
 reg [NOLOCK_BITS-1:0] pcie_no_lock_cntr = 0;
@@ -58,7 +59,7 @@ assign debug_state = fsm_usb2_reinit;
 always @(posedge cfg_mclk) begin
     pcie_no_lock_cntr <= pcie_no_lock_cntr + 1'b1;
 
-    if (pcie_no_lock_cntr[NOLOCK_BITS-1] == 1'b1 && startup_mode == SMODE_PCIE && ~pipe_mmcm_lock_out && !PCIE_INIT_ONLY) begin
+    if (pcie_no_lock_cntr[NOLOCK_BITS-1] == 1'b1 && startup_mode == SMODE_PCIE && ~pipe_mmcm_lock_out && !PCIE_INIT_ONLY && !USB2_INIT_ONLY) begin
         startup_mode <= SMODE_USB2;
     end
 

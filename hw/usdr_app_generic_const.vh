@@ -22,8 +22,10 @@ localparam REG_WR_PNTFY_ACK     = 9;
 localparam REG_WR_FLASHSPI_CMD  = 10;
 localparam REG_WR_FLASHSPI_ADDR = 11;
 
+// Old TX core
 localparam REG_WR_TXDMA_CNF_L   = 12;  // TODO replace
 localparam REG_WR_TXDMA_CNF_T   = 13;  // TODO replace
+
 localparam REG_WR_TXDMA_COMB    = 14;  // TODO replace:  TxDMA low 16 bits, TIMER high 16 bits
 localparam REG_INTS             = 15;
 ////////////////////////////////////////////////////
@@ -44,9 +46,14 @@ localparam REG_RD_FLASHSPI_DATA  = 11;
 
 /////////////////////////////////////////////
 
-
 // 16 to 22  -- GPI0 throuh GPI27 directly mmaped
 localparam REG_IGP_RDWD_CNT      = 28 - 16;
+
+// New TX core
+localparam REG_WR_TXDMA_CFG0     = 28;
+localparam REG_WR_TXDMA_CFG1     = 29;
+localparam REG_WR_TXDMA_TS_HI    = 30;
+localparam REG_WR_TXDMA_TS_LO    = 31;
 
 localparam REG_RD_TXDMA_STAT     = 28;
 localparam REG_RD_TXDMA_STATM    = 29;

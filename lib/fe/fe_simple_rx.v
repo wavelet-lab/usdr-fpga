@@ -9,7 +9,10 @@ module fe_simple_rx #(
    parameter BUFFER_SIZE_ADDR  = 16,
    parameter DATA_WIDTH        = 12,
    parameter ASYNC_BURST_CLOCK = 0,
-   parameter RAW_CHANS         = 4
+   parameter RAW_CHANS         = 4,
+   parameter PARAGRAPH_BITS    = 6,  // Not used, for compatibility
+   parameter NO_BACKPRESSURE_12 = 0, // Not used, for compatibility
+   parameter NO_KEEP           = 0   // Not used, for compatibility
 )(
   // High speed interface
   input                                rst,
@@ -98,13 +101,14 @@ wire        fe_cmd_route_valid;
 wire        fe_cmd_route_ready = 1'b1;
 
 reg         burster_rst;
+reg         burster_rst_dsp;
 reg         enable;
 reg         testpattern;
 
 assign o_enable = ~enable;
 assign o_tstp = testpattern;
 
-reg [1:0]                        cfg_in_fmt;
+reg [1:0]                        cfg_in_fmt = 1;
 reg [2:0]                        cfg_ch_fmt;
 
 // Total number of bursts fit in RAM
@@ -121,6 +125,7 @@ always @(posedge clk) begin
     rx_stream_cmd    <= RX_SCMD_IDLE;
 
     burster_rst      <= 1'b1;
+    burster_rst_dsp  <= 1'b1;
     enable           <= 1'b1;
 
     testpattern      <= 1'b0;
@@ -141,6 +146,7 @@ always @(posedge clk) begin
         end
 
         FE_CMD_BURST_FORMAT: begin
+          burster_rst_dsp  <= burster_rst || (!(fe_cmd_route_data[1:0] == FMT_DSP));
           cfg_in_fmt       <= fe_cmd_route_data[1:0];
           cfg_ch_fmt       <= fe_cmd_route_data[4:2];
           cfg_brst_words_z <= fe_cmd_route_data[MAX_BURST_BITS-1 + 5:5];
@@ -155,6 +161,7 @@ always @(posedge clk) begin
 
         FE_CMD_RESET: begin
           burster_rst      <= fe_cmd_route_data[15];
+          burster_rst_dsp  <= fe_cmd_route_data[15] || (!(cfg_in_fmt == FMT_DSP));
           rx_stream_active <= rx_stream_active && ~fe_cmd_route_data[14];
           enable           <= fe_cmd_route_data[13];
           testpattern      <= fe_cmd_route_data[12];
@@ -214,12 +221,50 @@ always @(posedge clk) begin
   end
 end
 
+wire rxdsp_in_fft_ready;
+wire burster_dsp_switch = (cfg_in_fmt == FMT_DSP);
 
 wire burster_valid = lin_valid && (~burst_throttle || ~fe_cur_burst_state) && ~burster_rst && rx_stream_active;
 wire burster_last  = (fe_cur_sample_nxt[MAX_BURST_BITS]);
 wire burster_ready;
 
-assign lin_ready = burster_ready || burster_rst || !rx_stream_active;
+wire [63:0]                 rxdsp_fft_data;
+wire                        rxdsp_fft_valid;
+wire                        rxdsp_fft_ready;
+wire                        rxdsp_fft_last;
+wire [7:0]                  rxdsp_fft_keep;
+wire [BUFFER_SIZE_ADDR-1:3] rxdsp_fft_laddr;
+
+rxdsp_fft #(.BUFFER_SIZE_ADDR(BUFFER_SIZE_ADDR), .DATA_WIDTH(16)) rxdsp_fft (
+  .clk(clk),
+ // .reset(burster_rst || !burster_dsp_switch),
+  .reset(burster_rst_dsp),
+
+  .cfg_bsz(burst_samples_sz),
+  .dspcmd_valid(1'b0),
+  .dspcmd_ready(),
+  .dspcmd_data(0),
+
+  .in_ai(lin_ai),
+  .in_aq(lin_aq),
+  .in_bi(lin_bi),
+  .in_bq(lin_bq),
+  .in_valid(burster_valid),
+  .in_ready(rxdsp_in_fft_ready),
+  .in_last(burster_last),
+
+  .dsp_data(rxdsp_fft_data),
+  .dsp_valid(rxdsp_fft_valid),
+  //.dsp_ready(rxdsp_fft_ready),
+  .dsp_last(rxdsp_fft_last),
+  .dsp_keep(rxdsp_fft_keep),
+  .dsp_waddr(rxdsp_fft_laddr)
+);
+
+//assign rxdsp_fft_ready = 1'b1;
+
+
+assign lin_ready = (burster_dsp_switch ?  rxdsp_in_fft_ready : burster_ready) || burster_rst || !rx_stream_active;
 
 ////////////////////////////////////////////////////////////////////////
 // Serializer
@@ -358,6 +403,7 @@ axis_opt_cc_fifo #(.CLK_CC(ASYNC_BURST_CLOCK), .WIDTH(32)) cmd_queue (
   .m_tx_tready(fe_cmd_route_ready)
 );
 
+
 generate
 if (ASYNC_BURST_CLOCK == 0) begin
     reg [BUFFER_SIZE_ADDR - 6:0] rptr;
@@ -391,7 +437,7 @@ end else begin
        .WIDTH(BUFFER_SIZE_ADDR - 6 + 1),
        .GRAY_BITS(2)
     ) ul_to_rx_addr (
-       .clk(fifo_burst_clk),
+       .in_clk(fifo_burst_clk),
        .in_rst(fifo_burst_rst),
        .in_increment(fifo_burst_release),
        .in_counter(fifo_burst_clk_rptr),
@@ -406,7 +452,7 @@ end else begin
        .WIDTH(BUFFER_SIZE_ADDR - 6 + 1),
        .GRAY_BITS(2)
     ) rx_to_ul_addr (
-       .clk(clk),
+       .in_clk(clk),
        .in_rst(clk_burst_rst),
        .in_increment(rxclk_wrbuffer_done),
        .in_counter(rxclk_wptr),
@@ -419,25 +465,25 @@ end else begin
     synchronizer sig_skip(
         .clk(fifo_burst_clk),
         .rst(fifo_burst_rst),
-        .in(sig_brst_skip),
-        .out(fifo_burst_skip)
+        .a_in(sig_brst_skip),
+        .s_out(fifo_burst_skip)
     );
 
     synchronizer sig_mlowmrk(
         .clk(fifo_burst_clk),
         .rst(fifo_burst_rst),
-        .in(rts_mlowmrk),
-        .out(fifo_burst_mlowmrk)
+        .a_in(rts_mlowmrk),
+        .s_out(fifo_burst_mlowmrk)
     );
 
-    synchronizer #(.INIT(1), .ASYNC_RESET(1)) farst_rxtimer (
+    synchronizer #(.INIT(1) /*, .ASYNC_RESET(1) */) farst_rxtimer (
         .clk(clk),
         .rst(rst),
         .a_in(fifo_burst_timer_rst),
         .s_out(rxtimer_rst_sync)
     );
 
-    synchronizer #(.INIT(1'b1), .ASYNC_RESET(1)) farst_enable (
+    synchronizer #(.INIT(1'b1) /*, .ASYNC_RESET(1) */) farst_enable (
         .clk(clk),
         .rst(rst),
         .a_in(fifo_burst_rst),
@@ -470,6 +516,14 @@ wire brst_cur_wcnt_rbit =
 
 wire s_mlowmrk = brst_cur_wcnt_rbit ^ wmrk_prev;
 
+localparam FFT_IDX_OFF = 9 - 2;
+wire [BUFFER_SIZE_ADDR-4:3] fft_idx = rxdsp_fft_laddr >> FFT_IDX_OFF;
+reg  [BUFFER_SIZE_ADDR-4:3] fft_idx_prev;
+
+reg  [BUFFER_SIZE_ADDR-1:7] buffer_acc;
+
+reg  [1:0]                  firecnt;
+reg                         dsp_mlowmrk;
 
 always @(posedge clk) begin
   if (clk_burst_rst) begin
@@ -480,20 +534,48 @@ always @(posedge clk) begin
     transmit_state <= 0;
     wmrk_prev      <= 0;
     rts_mlowmrk    <= 0;
+
+    fft_idx_prev   <= 0;
+    buffer_acc     <= 0;
+    firecnt        <= 0;
+    dsp_mlowmrk    <= 0;
   end else begin
+    firecnt        <= firecnt + 1'b1;
+
     if (iq_mux_valid) begin
       transmit_state <= n_transmit_state;
     end
 
-    rts_mlowmrk <= s_mlowmrk;
+    rts_mlowmrk <= (cfg_in_fmt == FMT_DSP) ? dsp_mlowmrk : s_mlowmrk;
 
-    if (iq_bword_valid) begin
+    // TODO proper assignment
+    if (cfg_in_fmt == FMT_DSP && rxdsp_fft_valid && fft_idx_prev != fft_idx) begin
+        if (!rxdsp_fft_last && ~brst_skip) begin
+            buffer_acc   <= buffer_acc + 8;
+        end
+        fft_idx_prev <= fft_idx;
+    end else begin
+        // We use != 0 here for simplicity since we imply FFT512, which is 1024 bytes. But we must check properly for lower FFT value
+        if (firecnt == 2'b00 && buffer_acc != 0) begin
+            buffer_acc  <= buffer_acc - (4'b0001 << cfg_mlowmrk);
+            dsp_mlowmrk <= ~dsp_mlowmrk;
+        end
+    end
+
+    if (cfg_in_fmt == FMT_DSP && rxdsp_fft_valid && rxdsp_fft_last) begin
+        fft_idx_prev <= 0;
+    end
+
+    if (cfg_in_fmt == FMT_DSP ? rxdsp_fft_valid : iq_bword_valid) begin
       if (~brst_skip) begin
         brst_skip     <= rxclk_fifo_burst_full;
         brst_cur_wcnt <= brst_cur_wcnt + 1'b1;
+        if (cfg_in_fmt == FMT_DSP) begin
+            brst_cur_wcnt <= 0;
+        end
       end
 
-      if (iq_bword_last) begin
+      if (cfg_in_fmt == FMT_DSP ? rxdsp_fft_last : iq_bword_last) begin
         transmit_state<= 0;
         brst_skip     <= rxclk_fifo_burst_full;
         sig_brst_skip <= sig_brst_skip ^ (brst_skip);
@@ -514,7 +596,7 @@ end
 wire symbol_valid = ~(brst_skip) && (iq_bword_valid);
 wire symbol_last  = iq_bword_last;
 
-assign rxclk_wrbuffer_done = symbol_valid && symbol_last;
+assign rxclk_wrbuffer_done =  (cfg_in_fmt == FMT_DSP) ? ~(brst_skip) && rxdsp_fft_valid && rxdsp_fft_last : symbol_valid && symbol_last;
 
 reg [BUFFER_SIZE_ADDR-1:3] axis_tx_taddr;
 reg [63:0]                 axis_tx_tdata;
@@ -583,10 +665,22 @@ always @(posedge clk) begin
         endcase
       end
 
-      FMT_DSP, FMT_16BIT: begin
+      FMT_16BIT: begin
         axis_tx_tkeep        <= 8'hff;
         axis_tx_tdata[31:0]  <= mux_s0_16;
         axis_tx_tdata[63:32] <= mux_s1_16;
+      end
+
+      FMT_DSP: begin
+        axis_tx_tkeep        <= rxdsp_fft_keep;
+        axis_tx_tdata        <= rxdsp_fft_data;
+
+        axis_tx_tvalid       <= ~rxclk_fifo_burst_full && rxdsp_fft_valid && (~(brst_skip));
+        axis_tx_tlast        <= rxdsp_fft_last;
+
+        if (~(brst_skip) && rxdsp_fft_valid) begin
+            axis_tx_taddr    <= ram_baddr + rxdsp_fft_laddr;
+        end
       end
     endcase
   end

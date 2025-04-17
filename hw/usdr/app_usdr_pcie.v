@@ -138,6 +138,7 @@ localparam IGPO_USB2_CFG     = 6;
 localparam IGPO_BOOSTER      = 7;
 localparam IGPO_LED          = 8;
 localparam IGPO_DCCORR       = 9;
+localparam IGPO_DSP_RX_CTRL  = 10;
 
 localparam IGPO_CLKMEAS      = 16;
 localparam IGPO_ENABLE_OSC   = 17;
@@ -181,6 +182,8 @@ assign igpo_rxsw       = intgpo[IGPO_RXSW * 8 + 0];
 assign igpo_dcen       = intgpo[IGPO_BOOSTER * 8 + 0];
 assign igpo_led        = intgpo[IGPO_LED * 8 + 0];
 assign enable_osc      = intgpo[IGPO_ENABLE_OSC * 8 + 0];
+
+wire   igpdspcfg_rst   = intgpo[IGPO_DSP_RX_CTRL * 8 + 0];
 
 ////////////////////////////////////////////////////////////////////////////////
 // LMS IF
@@ -266,13 +269,13 @@ wire        dsp_ready = 1'b1;
 
 // RX cross clock chain  (reset -- source rx_streaming)
 // rxclk_f_clk        =>       dsp_clk       =>        igp_clk
-// rxclk_stream_rst   <=   dsp_strem_rst     <=        igp_stream_rst
+// rxclk_stream_rst   <=   dsp_strem_rst     <=        { igp_stream_rst | igpdspcfg_rst }
 
 wire       rx_streaming;
 reg        rx_str_rst;
 assign igp_stream_rst = rx_str_rst;
 always @(posedge igp_clk) begin
-    if (igp_rst) begin
+    if (igpdspcfg_rst/*igp_rst*/) begin
         rx_str_rst <= 1'b1;
     end else begin
         rx_str_rst <= !rx_streaming;
@@ -303,7 +306,6 @@ rx_dsp_chain #(
     .dsp_data(dsp_data),
     .dsp_valid(dsp_valid),
     .dsp_ready(dsp_ready),
-    .dsp_cfg_rst(dsp_rst),
     .dsp_cfg_valid(dsp_dspchain_prg_valid),
     .dsp_cfg_data(dsp_dspchain_prg_data[7:0])
 );
@@ -402,6 +404,8 @@ usdr_app_generic_us #(
     .PUL_BUS_SPEED(MASTER_BUS_SPEED),
     .IGPI_COUNT(IGPI_COUNT),
     .IGPO_COUNT(IGPO_COUNT),
+    .COLLAPSE_RQ_EVENT(1'b0),
+    .COLLAPSE_CC_REPLY(1'b1),
     .SPI_WIDTH(32'h00_00_00_10),
     .SPI_DIV(32'h80_80_80_80),
     .SPI_COUNT(1),
@@ -413,6 +417,7 @@ usdr_app_generic_us #(
     .NO_TX(0),
     .USB2_PRESENT(USB2_PRESENT),
     .USDR_PID(USDR_PID),
+    .USE_EXT_DAC_CLK(1'b1),
     .TX_INITIAL_TS_COMP(0) // No compensation yet TBD
 ) gen_app (
     .hrst(igp_rst),
@@ -478,7 +483,7 @@ usdr_app_generic_us #(
     .rx_streaming(rx_streaming),
     .adc_ch_enable(),
 
-    .dac_clk(txclk_m_clk), //todo remove me!!!!
+    .dac_clk_ext(txclk_m_clk), //todo remove me!!!!
     .dac_realigned(dac_fifo_data),
     .dac_fifo_valid(dac_fifo_valid),
     .tx_ready(dac_fifo_ready),

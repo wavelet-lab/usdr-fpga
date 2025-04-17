@@ -344,8 +344,15 @@ wire brng_phy_nrst;
 wire init_usb_clk_done;
 wire                 pipe_mmcm_lock_out;
 
+`ifdef USB2_ONLY
+localparam [0:0] USB2_INIT_ONLY = 1'b1;
+`else
+localparam [0:0] USB2_INIT_ONLY = 1'b0;
+`endif
+
 xlnx_startup_mmcm #(
-    .PCIE_INIT_ONLY(PCIE_INIT_ONLY)
+    .PCIE_INIT_ONLY(PCIE_INIT_ONLY),
+    .USB2_INIT_ONLY(USB2_INIT_ONLY)
 ) sfsm (
     .cfg_mclk(cfg_mclk),
     .startup_mode_pcie(startup_mode_pcie),
@@ -503,9 +510,13 @@ wire                 dsp_clk;
 
 xilinx_pci_mmcm #(
     .PCIE_LANE(PCIE_BITS),
+`ifdef USB2_ONLY
+    .PCIE_LINK_SPEED(1),
+`endif
     .PCIE_GEN1_MODE(0),
     .PCIE_USERCLK_FREQ(MASTER_BUS_SPEED == 250_000_000 ? 4 : 3),
-    .PCIE_ALT_CLOCK(1'b1)
+    .PCIE_ALT_CLOCK(1'b1),
+    .CLK_333_DIV(4)
 ) xilinx_pci_mmcm (
     .rst_n_i(pipe_mmcm_rst_n),
     .refclk_i({ phy_clk, pipe_txoutclk_in }),
