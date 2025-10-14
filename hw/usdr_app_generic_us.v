@@ -22,6 +22,7 @@ module usdr_app_generic_us #(
     parameter DWISBE              = 1,
     parameter EGPIO_PRESENT       = 0,
     parameter EGPIO_WIDTH         = 15,
+    parameter EGPIO_ALT_MODE1     = 0,
     parameter UART_PRESENT        = 0,
     parameter ULTRA_SCALE         = 1,
     parameter USB2_PRESENT        = 0,
@@ -172,10 +173,14 @@ module usdr_app_generic_us #(
     output [EGPIO_WIDTH-1:0]           egpio_data_oe,
     input  [EGPIO_WIDTH-1:0]           egpio_data_in,
     output [EGPIO_WIDTH-1:0]           egpio_altf0_active,
+    output [EGPIO_WIDTH-1:0]           egpio_altf1_active,
     output [EGPIO_WIDTH-1:0]           egpio_alt0_in,
     input  [EGPIO_WIDTH-1:0]           egpio_alt0_out,
     input  [EGPIO_WIDTH-1:0]           egpio_alt0_out_oe,
-
+    output [EGPIO_WIDTH-1:0]           egpio_alt1_in,
+    input  [EGPIO_WIDTH-1:0]           egpio_alt1_out,
+    input  [EGPIO_WIDTH-1:0]           egpio_alt1_out_oe,
+    
     // DATA PHY configuration
     output                             cfg_port_clk,
     output                             cfg_port_rst,
@@ -2077,7 +2082,7 @@ assign mem_al_wready      = !mem_flash_wvalid && al_flashram_wready;
 generate
 if (EGPIO_PRESENT) begin: egpio_present
     // GPIO & AUX logic
-    axis_gpio #(.WIDTH(EGPIO_WIDTH)) axis_gpio(
+    axis_gpio #(.WIDTH(EGPIO_WIDTH), .ALT_MODE1(EGPIO_ALT_MODE1)) axis_gpio(
         .clk(pclk),
         .rst(prst),
 
