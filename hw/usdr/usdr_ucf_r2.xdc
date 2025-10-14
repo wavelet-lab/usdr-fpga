@@ -17,14 +17,14 @@ set_property CONFIG_VOLTAGE 1.8 [current_design]
 set_property BITSTREAM.CONFIG.USR_ACCESS         timestamp [current_design]
 
 # Bitstream configuration GOLDEN
- set_property BITSTREAM.CONFIG.NEXT_CONFIG_ADDR   0x1C0000   [current_design]
- set_property BITSTREAM.CONFIG.NEXT_CONFIG_REBOOT ENABLE     [current_design]
- set_property BITSTREAM.CONFIG.TIMER_CFG          0x002fbd0 [current_design]
- set_property BITSTREAM.CONFIG.CONFIGFALLBACK     ENABLE     [current_design]
+# set_property BITSTREAM.CONFIG.NEXT_CONFIG_ADDR   0x1C0000   [current_design]
+# set_property BITSTREAM.CONFIG.NEXT_CONFIG_REBOOT ENABLE     [current_design]
+# set_property BITSTREAM.CONFIG.TIMER_CFG          0x002fbd0 [current_design]
+# set_property BITSTREAM.CONFIG.CONFIGFALLBACK     ENABLE     [current_design]
 
 # operational.
-# set_property BITSTREAM.CONFIG.TIMER_CFG        0x4001fbd0  [current_design]
-# set_property BITSTREAM.CONFIG.CONFIGFALLBACK   ENABLE      [current_design]
+ set_property BITSTREAM.CONFIG.TIMER_CFG        0x4001fbd0  [current_design]
+ set_property BITSTREAM.CONFIG.CONFIGFALLBACK   ENABLE      [current_design]
 
 ###########################################################
 # PCIexpress (1.8V) Pinout and BANK14 (1.8V)

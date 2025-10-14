@@ -20,6 +20,7 @@ add_files -norecurse -fileset $obj $lib_dir/bus
 add_files -norecurse -fileset $obj $lib_dir/cc
 add_files -norecurse -fileset $obj $lib_dir/dma
 add_files -norecurse -fileset $obj $lib_dir/dsp
+add_files -norecurse -fileset $obj $lib_dir/dsp_fft
 add_files -norecurse -fileset $obj $lib_dir/fe
 add_files -norecurse -fileset $obj $lib_dir/gpio
 add_files -norecurse -fileset $obj $lib_dir/i2c
@@ -28,6 +29,7 @@ add_files -norecurse -fileset $obj $lib_dir/misc
 add_files -norecurse -fileset $obj $lib_dir/pci
 add_files -norecurse -fileset $obj $lib_dir/spi
 add_files -norecurse -fileset $obj $lib_dir/uart
+add_files -norecurse -fileset $obj $lib_dir/usb
 add_files -norecurse -fileset $obj $lib_dir/xilinx
 add_files -norecurse -fileset $obj [list \
     [file normalize "$origin_dir/usdr_top_all.v"] \
@@ -45,7 +47,10 @@ if {[string equal [get_filesets -quiet constrs_1] ""]} {
 
 import_ip $origin_dir/ip/blk_mem_gen_nrx/blk_mem_gen_nrx.xci -quiet
 import_ip $origin_dir/ip/blk_mem_gen_ntx/blk_mem_gen_ntx.xci -quiet
+import_ip $origin_dir/ip/blk_mem_gen_usb/blk_mem_gen_usb.xci -quiet
 import_ip $origin_dir/ip/pcie_7x_0/pcie_7x_0.xci -quiet
+import_ip $origin_dir/ip/xfft_0/xfft_0.xci -quiet
+
 
 upgrade_ip [get_ips blk_mem_gen_nrx]
 upgrade_ip [get_ips pcie_7x_0]
