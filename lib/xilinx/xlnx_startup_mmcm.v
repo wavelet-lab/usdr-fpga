@@ -5,8 +5,10 @@
 //
 module xlnx_startup_mmcm #(
     parameter [0:0] PCIE_INIT_ONLY = 1'b0,
-    parameter [0:0] USB2_INIT_ONLY = 1'b0
+    parameter [0:0] USB2_INIT_ONLY = 1'b0,
+    parameter [0:0] HAS_RESET      = 1'b0
 )(
+    input  cfg_reset,
     input  cfg_mclk,
     output startup_mode_pcie,
 
@@ -35,10 +37,10 @@ reg                  startup_mode = (USB2_INIT_ONLY) ? 1'b1 : 1'b0; // 0 - PCIE;
 reg                  pipe_mmcm_rst_n_r = 1'b1;
 
 reg [NOLOCK_BITS-1:0] pcie_no_lock_cntr = 0;
-reg                  brng_usb_clk_en_r = 1'b0;
-reg                  brng_usb_nrst_r   = 1'b0;
-reg                  brng_usb_user_reset_r = 1'b1;
-reg                  brng_usb_logic_reset_r = 1'b1;
+reg                   brng_usb_clk_en_r = 1'b0;
+reg                   brng_usb_nrst_r   = 1'b0;
+reg                   brng_usb_user_reset_r = 1'b1;
+reg                   brng_usb_logic_reset_r = 1'b1;
 
 localparam           IUSB2_DLY = 8;
 wire [4:0]           fsm_usb2_reinit = pcie_no_lock_cntr[IUSB2_DLY + 4:IUSB2_DLY];
@@ -57,6 +59,15 @@ localparam [4:0]     FUR_USBCLK_EN          = 5'd0,
 assign debug_state = fsm_usb2_reinit;
 
 always @(posedge cfg_mclk) begin
+  if (HAS_RESET && cfg_reset) begin
+    startup_mode           <= (USB2_INIT_ONLY) ? 1'b1 : 1'b0; // 0 - PCIE; 1 - USB2
+    pipe_mmcm_rst_n_r      <= 1'b1;
+    pcie_no_lock_cntr      <= 0;
+    brng_usb_clk_en_r      <= 1'b0;
+    brng_usb_nrst_r        <= 1'b0;
+    brng_usb_user_reset_r  <= 1'b1;
+    brng_usb_logic_reset_r <= 1'b1;
+  end else begin
     pcie_no_lock_cntr <= pcie_no_lock_cntr + 1'b1;
 
     if (pcie_no_lock_cntr[NOLOCK_BITS-1] == 1'b1 && startup_mode == SMODE_PCIE && ~pipe_mmcm_lock_out && !PCIE_INIT_ONLY && !USB2_INIT_ONLY) begin
@@ -87,6 +98,7 @@ always @(posedge cfg_mclk) begin
         FUR_END:             pcie_no_lock_cntr[IUSB2_DLY + 4:IUSB2_DLY]    <= pcie_no_lock_cntr[IUSB2_DLY + 4:IUSB2_DLY];
         endcase
     end
+  end
 end
 
 assign startup_mode_pcie    = (startup_mode == SMODE_PCIE);
