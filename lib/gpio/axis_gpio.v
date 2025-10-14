@@ -11,7 +11,8 @@ module axis_gpio #(
     parameter _INT_WIDTH      = (WIDTH > 15) ? 15 : WIDTH,
     parameter DEF_CFG_GPIO    = 30'h0,
     parameter DEF_GPIO_OUT    = 15'h0,
-    parameter ALT_CFG0_OE     = 15'h0
+    parameter ALT_CFG0_OE     = 15'h0,
+    parameter ALT_MODE1       = 1'b0
 )(
     input                     clk,
     input                     rst,
@@ -30,11 +31,17 @@ module axis_gpio #(
     output [_INT_WIDTH-1:0]   gpo_data,
     output [_INT_WIDTH-1:0]   gpo_data_oe,
     output [_INT_WIDTH-1:0]   gpio_altf0_valid,
-
-    // Alternative functions
+    output [_INT_WIDTH-1:0]   gpio_altf1_valid,
+    
+    // Alternative functions 0
     output  [_INT_WIDTH-1:0]  alt0_in,
     input   [_INT_WIDTH-1:0]  alt0_out,
-    input   [_INT_WIDTH-1:0]  alt0_out_oe
+    input   [_INT_WIDTH-1:0]  alt0_out_oe,
+    
+    // Alternative functions 1
+    output  [_INT_WIDTH-1:0]  alt1_in,
+    input   [_INT_WIDTH-1:0]  alt1_out,
+    input   [_INT_WIDTH-1:0]  alt1_out_oe
 );
 
 reg [2 * _INT_WIDTH - 1:0]    cfg_gpioconf;
@@ -83,27 +90,30 @@ end
 // config
 // 0   -- input
 // 1   -- output
-// 2   -- altconfig
-// 3   -- sampled input
+// 2   -- altconfig0
+// 3   -- altconfig1
 localparam [1:0]
     GPIOCFG_INPUT  = 2'b00,
     GPIOCFG_OUTPUT = 2'b01,
-    GPIOCFG_ALT0   = 2'b10;
+    GPIOCFG_ALT0   = 2'b10,
+    GPIOCFG_ALT1   = 2'b11;
 
 genvar i;
 generate
 for (i = 0; i < _INT_WIDTH; i=i+1) begin: route
     wire [1:0] cfg_pin = { cfg_gpioconf[2 * i + 1:2 * i] };
 
-    assign gpo_data[i]         = (cfg_pin == GPIOCFG_ALT0) ? alt0_out[i]    : gpio_odata[i];
-    assign gpo_data_oe[i]      = (cfg_pin == GPIOCFG_ALT0) ? alt0_out_oe[i] : (cfg_pin == GPIOCFG_OUTPUT) ? 1'b1 : 1'b0;
+    assign gpo_data[i]         = gpio_altf1_valid[i] ? alt1_out[i]    : gpio_altf0_valid[i] ? alt0_out[i]    : gpio_odata[i];
+    assign gpo_data_oe[i]      = gpio_altf1_valid[i] ? alt1_out_oe[i] : gpio_altf0_valid[i] ? alt0_out_oe[i] : (cfg_pin == GPIOCFG_OUTPUT) ? 1'b1 : 1'b0;
     assign gpio_altf0_valid[i] = (cfg_pin == GPIOCFG_ALT0);
+    assign gpio_altf1_valid[i] = (cfg_pin == GPIOCFG_ALT1) && ALT_MODE1;
 end
 endgenerate
 
 assign axis_rvalid = 1'b1;
 assign axis_rdata  = { {(16-_INT_WIDTH){1'b0}}, gpio_odata, {(16-_INT_WIDTH){1'b0}}, gpi_data};
 assign alt0_in     = gpi_data;
+assign alt1_in     = gpi_data;
 
 assign axis_wready = 1'b1;
 
