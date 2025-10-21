@@ -173,7 +173,16 @@ wire [WIDTH - 1:0] last_out = (DEEP <= 32) ? srlout_0 :
   		                      (DEEP <= 96) ? srlout_2 : srlout_3;
 assign datasrl_o = last_out;
 
-wire [WIDTH - 1:0] data_i_cyc =  (IN_WIDTH < WIDTH) ? { last_out[WIDTH - IN_WIDTH - 1:0], data_i } : data_i;
+wire [WIDTH - 1:0] data_i_cyc;
+generate
+//assign data_i_cyc = (IN_WIDTH < WIDTH) ? { last_out[WIDTH - IN_WIDTH - 1:0], data_i } : data_i;
+if (IN_WIDTH < WIDTH) begin
+	assign data_i_cyc =  { last_out[WIDTH - IN_WIDTH - 1:0], data_i };
+end else begin
+	assign data_i_cyc =  data_i;
+end
+
+endgenerate
 
 reg [WIDTH - 1:0] dataq_o_r = INIT_REG;
 assign dataq_o = dataq_o_r;

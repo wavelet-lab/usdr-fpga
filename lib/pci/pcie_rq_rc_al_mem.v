@@ -146,7 +146,16 @@ assign pcie_addr[63:DATA_BITS]      = s_tcq_raddr;
 assign pcie_addr[DATA_BITS - 1:2]   = 0;
 
 
-wire addr64bit7s = (EN64BIT && (REMOTE_ADDR_WIDTH > 32)) ? s_tcq_raddr[REMOTE_ADDR_WIDTH-1:32] != 0 : 1'b0;
+//wire addr64bit7s = (EN64BIT && (REMOTE_ADDR_WIDTH > 32)) ? s_tcq_raddr[REMOTE_ADDR_WIDTH-1:32] != 0 : 1'b0;
+wire addr64bit7s;
+generate
+if (EN64BIT && (REMOTE_ADDR_WIDTH > 32)) begin
+    assign addr64bit7s = s_tcq_raddr[REMOTE_ADDR_WIDTH-1:32] != 0;
+end else begin
+    assign addr64bit7s = 1'b0;
+end
+endgenerate
+
 assign s_tcq_ready = (ULTRA_SCALE ? tag_alloc_ready && tag_alloc_valid : req_stage == REQ_POST_DW1 && (!m_axis_rq_tvalid || m_axis_rq_tready));
 assign m_axis_rq_tuser = { 1'b0, 3'b000, 4'hf, 4'hf }; // {discontinue, add_offset[2:0], last_be, first_be }
 
