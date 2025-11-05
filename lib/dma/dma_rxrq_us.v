@@ -93,6 +93,9 @@ reg [DMA_BUF_BITS:0] dbno_xfred;     // BUF# transferred to host
 reg [DMA_BUF_BITS:0] dbno_ntfysent;  // BUF# notification sent
 reg [DMA_BUF_BITS:0] dbno_confirmed; // BUF# confirmed by user (can reuse again)
 
+wire [DMA_BUF_BITS:0] xfer_ahead_inram =  dbno_inram - dbno_xfred;
+wire                  xfer_inram_fail = xfer_ahead_inram[DMA_BUF_BITS];
+
 reg                  dma_en;
 wire [31:12]         dma_raddr;
 
@@ -109,23 +112,30 @@ ram_sxp #(.DATA_WIDTH(32-12), .ADDR_WIDTH(DMA_BUF_BITS), .ULTRA_SCALE(ULTRA_SCAL
     .rdata(dma_raddr)
 );
 
-reg [BUFFER_SIZE_BITS-1:DATA_BITS] cfg_brst_words_z;  // bytes in each bursts
-reg [MAX_BUSRTS_BITS-1:0]          cfg_buff_brst_z;   // bursts in DMA buffer
+localparam TBUFFER_WIDTH = BUFFER_SIZE_BITS + MAX_BUSRTS_BITS;
+
+reg [BUFFER_SIZE_BITS-1:DATA_BITS] cfg_brst_words_z;    // bytes in each bursts
+reg [MAX_BUSRTS_BITS-1:0]          cfg_buff_brst_z;     // bursts in DMA buffer
+reg [TBUFFER_WIDTH-1:12]           cfg_dma_buf_limit_z; // limit of every DMA buffer to control DMA buffer overrun due to incorrect busrt configuration etc
 
 always @(posedge clk) begin
   if (rst) begin
+    cfg_dma_buf_limit_z <= 0;
   end else begin
     if (s_al_wvalid && (s_al_waddr[7:5] == 1)) begin
-      cfg_brst_words_z <= s_al_wdata[BUFFER_SIZE_BITS-3:DATA_BITS-3];
+      cfg_brst_words_z    <= s_al_wdata[BUFFER_SIZE_BITS-3:DATA_BITS-3];
     end else if (s_al_wvalid && (s_al_waddr[7:5] == 2)) begin
-      cfg_buff_brst_z  <= s_al_wdata;
+      cfg_buff_brst_z     <= s_al_wdata;
+    end else if (s_al_wvalid && (s_al_waddr[7:5] == 7)) begin
+      cfg_dma_buf_limit_z <= s_al_wdata[TBUFFER_WIDTH-1:12];
     end
   end
 end
 
+
 wire                                     tbuffer_valid;
 wire                                     tbuffer_last;
-wire [BUFFER_SIZE_BITS:DATA_BITS]        tbuffer_data;
+wire [TBUFFER_WIDTH:DATA_BITS]           tbuffer_data;
 
 wire                                     tburst_valid;
 wire                                     tburst_last;
@@ -196,26 +206,29 @@ always @(posedge clk) begin
   end
 end
 
+
+
+
 wire [DMA_BUF_BITS:0] dma_buff_avail_cnt = dbno_confirmed - dbno_xfred - 1'b1;
 wire                  dma_buff_avail     = dma_buff_avail_cnt[DMA_BUF_BITS] || inplace_cnf_enabled;
 wire [DMA_BUF_BITS:0] dma_host_avail_cnf = dma_buff_avail_cnt; // not in userspace
 
-wire                              full_buffer_finished;
-wire [BUFFER_SIZE_BITS:DATA_BITS] full_buffer_filled_z; // Number of bytes in fully filled DMA buffer
+wire                             full_buffer_finished;
+wire [TBUFFER_WIDTH:DATA_BITS]   full_buffer_filled_z; // Number of bytes in fully filled DMA buffer
 
 // Buffer bursts status
-ram_sxp #(.DATA_WIDTH(BUFFER_SIZE_BITS+2-DATA_BITS), .ADDR_WIDTH(DMA_BUF_BITS), .ULTRA_SCALE(ULTRA_SCALE), .MODE_SDP(1'b1)) buf_stats (
+ram_sxp #(.DATA_WIDTH(2 + TBUFFER_WIDTH - DATA_BITS), .ADDR_WIDTH(DMA_BUF_BITS), .ULTRA_SCALE(ULTRA_SCALE), .MODE_SDP(1'b1)) buf_stats (
     .wclk(clk),
     .we(tbuffer_valid || full_buffer_filled_z_reset),
     .waddr(dbno_inram[DMA_BUF_BITS-1:0]),
-    .wdata({ tbuffer_last, full_buffer_filled_z_reset ? {(BUFFER_SIZE_BITS + 1 - DATA_BITS){1'b1}} : tbuffer_data}),
+    .wdata({ tbuffer_last, full_buffer_filled_z_reset ? {(1 + TBUFFER_WIDTH - DATA_BITS){1'b1}} : tbuffer_data}),
     .raddr(dbno_xfred[DMA_BUF_BITS-1:0]),
     .rdata({full_buffer_finished, full_buffer_filled_z})
 );
 
 
-reg  [BUFFER_SIZE_BITS:DATA_BITS] dma_buffer_req_sent;
-wire [BUFFER_SIZE_BITS:DATA_BITS] dma_buffer_cts_z = full_buffer_filled_z - dma_buffer_req_sent;
+reg  [TBUFFER_WIDTH:DATA_BITS]   dma_buffer_req_sent;
+wire [TBUFFER_WIDTH:DATA_BITS]   dma_buffer_cts_z = full_buffer_filled_z - {1'b0, dma_buffer_req_sent};
 
 wire [2:0]                     mlowmrk_size_ext_z = (cfg_max_payload_sz == 2'b00) ? 3'b000 :
                                                     (cfg_max_payload_sz == 2'b01) ? 3'b001 :
@@ -223,14 +236,14 @@ wire [2:0]                     mlowmrk_size_ext_z = (cfg_max_payload_sz == 2'b00
 wire [9:DATA_BITS]             mlowmrk_size_z     = { mlowmrk_size_ext_z, {(7-DATA_BITS){1'b1}} };
 
 wire stat_cycle_valid                             = 1'b1;
-wire [BUFFER_SIZE_BITS:DATA_BITS] pcie_buff_2     = dma_buffer_cts_z - mlowmrk_size_z;
-wire                      pcie_maxpayload_avail   = ~pcie_buff_2[BUFFER_SIZE_BITS];
+wire [TBUFFER_WIDTH:DATA_BITS] pcie_buff_2        = dma_buffer_cts_z - mlowmrk_size_z;
+wire                      pcie_maxpayload_avail   = ~pcie_buff_2[TBUFFER_WIDTH];
 wire [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] pcie_reqsize_z = (pcie_maxpayload_avail) ? mlowmrk_size_z : dma_buffer_cts_z;
 
 // Buffer is finished and we have ` <= mlowmrk_size_ext_z ` in buffer
 wire                      pcie_last_buff_transfer = full_buffer_finished && (~pcie_maxpayload_avail || pcie_buff_2 == 0);
-wire                      pcie_transfer_avail     = (pcie_maxpayload_avail || pcie_last_buff_transfer) && ~dma_buffer_cts_z[BUFFER_SIZE_BITS];
-wire                      pcie_transfer_done      = full_buffer_finished && dma_buffer_cts_z[BUFFER_SIZE_BITS];
+wire                      pcie_transfer_avail     = (pcie_maxpayload_avail || pcie_last_buff_transfer) && ~dma_buffer_cts_z[TBUFFER_WIDTH];
+wire                      pcie_transfer_done      = full_buffer_finished && dma_buffer_cts_z[TBUFFER_WIDTH];
 
 assign axis_fburts_valid = 1'b1;
 assign axis_fbuffs_valid = 1'b1;
@@ -251,9 +264,8 @@ ram_sxp #(.DATA_WIDTH(1+MAX_BUSRTS+MAX_BUFF_SKIP_BITS), .ADDR_WIDTH(DMA_BUF_BITS
 assign axis_fbuffs_data[31:24] = { st_buffer_full, {(6-DMA_BUF_BITS){1'b1}},  dma_host_avail_cnf };
 
 
-reg  req_tag_valid;
+
 reg  req_trans_last;
-wire tag_avaliable = !req_tag_valid;
 reg [BUFFER_BURST_BITS - 1 + DATA_BITS:DATA_BITS] dma_req_len;
 
 assign m_tcq_cready = 1'b1;
@@ -262,9 +274,9 @@ reg noop_send;
 wire transfer_buf_end = m_tcq_cvalid && m_tcq_cready && req_trans_last || noop_send;
 assign dma_next_buf   = m_tcq_valid && m_tcq_ready && req_trans_last || noop_send;
 
-localparam INT_COUNTER_WIDTH = 3;
-reg [INT_COUNTER_WIDTH - 1:0] outstanding_interrupts;
-
+localparam INT_COUNTER_WIDTH = 2;
+reg [INT_COUNTER_WIDTH :0] outstanding_interrupts;
+wire interrupts_busy = outstanding_interrupts[INT_COUNTER_WIDTH];
 
 always @(posedge clk) begin
   if (~dma_en) begin
@@ -289,15 +301,19 @@ always @(posedge clk) begin
   end
 end
 
+
+wire inc_cntr_event = confirm_read_buffer || dma_next_buf || tbuffer_last || (stat_cnf_ready && stat_cnf_valid || inplace_cnf_valid && inplace_cnf_ready);
+
 /////////////////////////////////////////////////////////
 // Reporting freeing up RING FIFO buffer
 
-reg [BUFFER_SIZE_BITS:DATA_BITS]   dma_transferred;        // Number of bytes confirmed to be sent
-reg [BUFFER_SIZE_BITS:DATA_BITS]   dma_burst_bytes_freed;  // Number of bytes reported to be freed
+localparam FREECNTR_BITS = (1'b1) ? TBUFFER_WIDTH : BUFFER_SIZE_BITS;
+reg [FREECNTR_BITS:DATA_BITS]   dma_transferred;        // Number of bytes confirmed to be sent
+reg [FREECNTR_BITS:DATA_BITS]   dma_burst_bytes_freed;  // Number of bytes reported to be freed
 
-wire [BUFFER_SIZE_BITS:DATA_BITS]  dma_bytes_not_freed    = dma_transferred - dma_burst_bytes_freed;
-wire [BUFFER_SIZE_BITS:DATA_BITS]  availbytes_free_burst  = dma_bytes_not_freed - cfg_brst_words_z - 1'b1;
-wire                               can_free_burst         = ~availbytes_free_burst[BUFFER_SIZE_BITS];
+wire [FREECNTR_BITS:DATA_BITS]  dma_bytes_not_freed    = dma_transferred - dma_burst_bytes_freed;
+wire [FREECNTR_BITS:DATA_BITS]  availbytes_free_burst  = dma_bytes_not_freed - cfg_brst_words_z - 1'b1;
+wire                               can_free_burst         = ~availbytes_free_burst[FREECNTR_BITS];
 
 reg signal_release;
 assign fifo_burst_release = signal_release;
@@ -324,7 +340,14 @@ wire      dma_cycle_valid   = 1'b1;
 reg       req_tag_dummy;
 reg       m_tcq_dma_done;
 
-wire      mem_wr_event = ~inplace_cnf_valid && ~m_tcq_valid && dma_buff_avail && (pcie_transfer_avail || pcie_transfer_done) && ~full_buffer_filled_z_reset && tag_avaliable && stat_cycle_valid && dma_cycle_valid;
+reg  req_tag_busy;
+wire tag_avaliable = m_tcq_cvalid || !req_tag_busy;
+
+// Buffer check on 4KiB boundary
+wire [TBUFFER_WIDTH:12] dma_buf_orun    =  {1'b0, cfg_dma_buf_limit_z} - dma_buffer_req_sent[TBUFFER_WIDTH:12];
+wire                    dma_no_space    =  dma_buf_orun[TBUFFER_WIDTH];
+
+wire      mem_wr_event = !dma_no_space && !interrupts_busy && ~inplace_cnf_valid && ~m_tcq_valid && dma_buff_avail && (pcie_transfer_avail || pcie_transfer_done) && ~full_buffer_filled_z_reset && tag_avaliable && stat_cycle_valid && dma_cycle_valid;
 
 
 // DMA control and PCIe data movement process
@@ -332,7 +355,7 @@ always @(posedge clk) begin
   if (rst) begin
     dma_en                       <= 1'b0;
     m_tcq_valid                  <= 1'b0;
-    req_tag_valid                <= 1'b0;
+    req_tag_busy                 <= 1'b0;
     req_tag_dummy                <= 1'b0;
     rx_streamingready            <= 1'b0;
     noop_send                    <= 1'b0;
@@ -347,14 +370,14 @@ always @(posedge clk) begin
         m_tcq_raddr          <= m_tcq_raddr         + m_tcq_length + 1'b1;
         dma_buffer_req_sent  <= dma_buffer_req_sent + m_tcq_length + 1'b1;
       end
+    end
 
-      if (req_trans_last) begin
-        dma_buffer_req_sent<= 0;
-      end
+    if (req_trans_last && (m_tcq_valid && m_tcq_ready || noop_send)) begin
+      dma_buffer_req_sent <= 0;
     end
 
     if (m_tcq_cvalid && m_tcq_cready) begin
-      req_tag_valid <= 1'b0;
+      req_tag_busy <= 1'b0;
       if (!req_tag_dummy) begin
         dma_transferred              <= dma_transferred + dma_req_len + 1'b1;
       end
@@ -368,16 +391,21 @@ always @(posedge clk) begin
       rx_streamingready <= 1'b1;
     end
 
+    noop_send <= 1'b0;
+    if (noop_send) begin
+        req_tag_busy <= 1'b0;
+    end
+
     if (~dma_en) begin
       m_tcq_laddr         <= 0;
       dma_buffer_req_sent <= 0;
       dma_transferred     <= 0;
-      req_tag_valid       <= 2'b0;
+      req_tag_busy        <= 1'b0;
       inplace_cnf_valid   <= 1'b0;
 
       if (start_rx) begin
         dma_en            <= 1'b1;
-        req_trans_last    <= 2'b01;
+        req_trans_last    <= 1'b1;
       end
 
       rx_streamingready   <= 1'b0;
@@ -385,8 +413,6 @@ always @(posedge clk) begin
       if (inplace_cnf_valid && inplace_cnf_ready) begin
         inplace_cnf_valid <= 1'b0;
       end
-
-      noop_send <= 1'b0;
 
       if (mem_wr_event) begin
         if (pcie_transfer_avail) begin
@@ -401,11 +427,16 @@ always @(posedge clk) begin
             m_tcq_valid             <= 1'b1;
             m_tcq_dma_done          <= pcie_transfer_done;
 
-            req_tag_valid           <= 1'b1;
+            req_tag_busy            <= 1'b1;
             req_trans_last          <= pcie_last_buff_transfer || pcie_transfer_done;
         end else begin
             noop_send               <= 1'b1;
-            dma_buffer_req_sent     <= 0;
+
+            m_tcq_valid             <= 1'b0;
+            m_tcq_dma_done          <= 1'b1;
+
+            req_tag_busy            <= 1'b1;
+            req_trans_last          <= 1'b1;
         end
 
         inplace_cnf_valid       <= (pcie_last_buff_transfer || pcie_transfer_done) && inplace_cnf_enabled;

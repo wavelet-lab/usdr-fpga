@@ -13,7 +13,8 @@ module bsig_to_burstbuffer #(
   parameter EN_LOWWMRK         = 1,
   parameter BUFFER_SIZE_BITS   = 16,
   parameter MAX_BUFF_SKIP_BITS = 24,
-  parameter DATA_BITS          = 4       // Minimum transfer burst 3 - 64bits; 4 - 128bits; 5 - 256bits
+  parameter DATA_BITS          = 4,       // Minimum transfer burst 3 - 64bits; 4 - 128bits; 5 - 256bits
+  parameter _TBUFFER_WIDTH     = BUFFER_SIZE_BITS + MAX_BUSRTS_BITS
 )(
     input                                clk,
     input                                dma_en,
@@ -31,7 +32,7 @@ module bsig_to_burstbuffer #(
 
     output                               tbuffer_valid,     // Buffer update stats
     output                               tbuffer_last,      // Last update for this buffer
-    output [BUFFER_SIZE_BITS:DATA_BITS]  tbuffer_data,      // Number of bytes filled in current buffer
+    output [_TBUFFER_WIDTH:DATA_BITS]    tbuffer_data,      // Number of bytes filled in current buffer
     
     output                                     tburst_valid,     // 
     output                                     tburst_last,      // Last burst in complete buffer
@@ -61,8 +62,8 @@ reg [MAX_BUSRTS_BITS-1:0]         rem_buffers_z;
 wire [MAX_BUSRTS_BITS:0]          nxt_rem_buffers_z    = { 1'b0, rem_buffers_z } - 1'b1;
 wire                              last_burst_in_buff   = nxt_rem_buffers_z[MAX_BUSRTS_BITS];
 
-reg [BUFFER_SIZE_BITS:DATA_BITS]  cur_buffer_filled_z;  // Number of bytes filled in current buffer
-reg [BUFFER_SIZE_BITS:DATA_BITS]  cur_burst_rem_z;      // Remaining bytes to fill in current BURST
+reg [_TBUFFER_WIDTH:DATA_BITS]  cur_buffer_filled_z;  // Number of bytes filled in current buffer
+reg [_TBUFFER_WIDTH:DATA_BITS]  cur_burst_rem_z;      // Remaining bytes to fill in current BURST
 
 reg                               zbufn;
 wire                              non_zero_buffer      = zbufn | signal_fill;
@@ -75,8 +76,8 @@ wire [9:7]                        mlowmrk_size_ext_z   = (cfg_max_payload_sz == 
                                                          (cfg_max_payload_sz == 2'b10) ? 3'b011 : 3'b111;
 wire [9:DATA_BITS]                mlowmrk_size_z       = { mlowmrk_size_ext_z, {(7 - DATA_BITS){1'b1}} };
 
-wire [BUFFER_SIZE_BITS:DATA_BITS] nxt_cur_buffer_filled_z  = cur_buffer_filled_z + cur_burst_rem_z + 1'b1;
-wire [BUFFER_SIZE_BITS:DATA_BITS] nxt_cur_buffer_mlowmrk_z = cur_buffer_filled_z + mlowmrk_size_z + 1'b1;
+wire [_TBUFFER_WIDTH:DATA_BITS] nxt_cur_buffer_filled_z  = cur_buffer_filled_z + cur_burst_rem_z + 1'b1;
+wire [_TBUFFER_WIDTH:DATA_BITS] nxt_cur_buffer_mlowmrk_z = cur_buffer_filled_z + mlowmrk_size_z + 1'b1;
 
 reg [MAX_BUSRTS-1:0]              buff_status;
 reg [MAX_BUFF_SKIP_BITS-1:0]      buff_skiped;
@@ -86,7 +87,7 @@ wire [MAX_BUSRTS-1:0]             nxt_buff_status = { signal_fill, buff_status[M
 always @(posedge clk) begin
   if (~dma_en) begin
     cur_buffer_filled_z <= ~0;
-    cur_burst_rem_z     <= {1'b0, cfg_brst_words_z};
+    cur_burst_rem_z     <= {{MAX_BUSRTS_BITS{1'b0}}, cfg_brst_words_z};
     zbufn               <= 0;
     completebfn         <= 1'b1;
     buff_skiped         <= 0;
@@ -102,7 +103,7 @@ always @(posedge clk) begin
     if (signal_nxt_brst) begin
       if (signal_fill) begin
         cur_buffer_filled_z <= nxt_cur_buffer_filled_z;
-        cur_burst_rem_z     <= {1'b0, cfg_brst_words_z};
+        cur_burst_rem_z     <= {{MAX_BUSRTS_BITS{1'b0}}, cfg_brst_words_z};
       end
 
       if (last_burst_in_buff) begin

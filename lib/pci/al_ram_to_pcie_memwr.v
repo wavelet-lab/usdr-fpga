@@ -14,6 +14,7 @@ module al_ram_to_pcie_memwr #(
     parameter ULTRA_SCALE = 0,
     parameter KEEP_WIDTH_ = DATA_WIDTH_/32,
     parameter USER_WIDTH_ = ULTRA_SCALE ? 62 : 1,
+    parameter [0:0] EARLY_CNF   = 0,
     parameter TX_BUF_CTRL = 0,  // for 7-Series
     parameter EN64BIT = 0       // for 7-Series
 )(
@@ -122,6 +123,10 @@ always @(posedge clk) begin
         m_al_arvalid         <= !pcie_burst_last;
         m_al_araddr          <= m_al_araddr + 1'b1;
         m_al_arid            <= pcie_burst_last_nxt;
+
+        if (EARLY_CNF && pcie_burst_last_nxt && !pcie_burst_last) begin
+            s_tcq_cvalid <= 1'b1;
+        end
     end
 
     if (s_tcq_ready && s_tcq_valid) begin
@@ -204,7 +209,7 @@ always @(posedge clk) begin
             pcie_pkt_last      <= m_al_rid;
         end
 
-        if (m_al_rid && (pcie_64bit_act || ~pcie_pkt_last)) begin
+        if (!EARLY_CNF && (m_al_rid && (pcie_64bit_act || ~pcie_pkt_last))) begin
             s_tcq_cvalid     <= 1'b1;
         end
 
@@ -213,6 +218,7 @@ always @(posedge clk) begin
             m_al_arvalid         <= 1'b1;
             m_al_araddr          <= s_tcq_laddr;
             m_al_arid            <= pcie_burst_counter_req_nxt[REQUEST_LEN_BITS];
+
             pcie_burst_counter   <= pcie_burst_counter_req_nxt;
             dma_state            <= DMA_FILL_PCIE_HDR;
 

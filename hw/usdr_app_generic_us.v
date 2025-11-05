@@ -1295,7 +1295,8 @@ al_ram_to_pcie_memwr #(
     .LOCAL_ADDR_WIDTH(RAM_RX_ADDR_W),
     .DATA_BITS(DATA_BITS),
     .ULTRA_SCALE(ULTRA_SCALE),
-    .TX_BUF_CTRL(1'b1)
+    .TX_BUF_CTRL(1'b1),
+    .EARLY_CNF(1)
 ) pcie_ram_to_rq_memwr (
     .clk(hclk),
     .rst(hrst),
