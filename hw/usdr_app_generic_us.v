@@ -388,6 +388,7 @@ assign s_axis_rq_tuser[27:24] = axis_rq_tag[3:0];
 assign s_axis_rq_tuser[59:28] = 0;
 assign s_axis_rq_tuser[61:60] = axis_rq_tag[5:4];
 `else
+wire       us_rq_busy         = 0;
 assign s_axis_rq_tuser[61:12] = 0; 
 `endif
 
