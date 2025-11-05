@@ -1160,7 +1160,26 @@ wire                               rxdma_bram_en;
 
 generate
 if (ULTRA_SCALE) begin
-    if (RAM_RX_ADDR_W == 16 && WIDTH_RX == 128 && WIDTH_FE_RX == 128) begin
+    if (RAM_RX_ADDR_W == 16 && WIDTH_RX == 128 && WIDTH_FE_RX == 64) begin
+        // 64kB, direct map
+        blk_mem_gen_nrx_128_64 fifo_mem_rx (
+            .clka(hclk),
+            .rsta(hrst),
+            .ena(rxdma_bram_en),
+            .wea(rxdma_bram_wbe),
+            .addra(rxdma_bram_addr),
+            .dina(rxdma_bram_data_wr),
+            .douta(rxdma_bram_data_rd),
+
+            .clkb(adc_clk),
+            .rstb(adc_rst),
+            .enb(fe_rxdma_ten),
+            .web(fe_rxdma_twbe),
+            .addrb(fe_rxdma_taddr),
+            .dinb(fe_rxdma_tdata_wr),
+            .doutb()
+        );
+    end else if (RAM_RX_ADDR_W == 16 && WIDTH_RX == 128 && WIDTH_FE_RX == 128) begin
         // 64kB, direct map
         blk_mem_gen_nrx_128_128 fifo_mem_rx (
             .clka(hclk),
@@ -1550,7 +1569,24 @@ wire [RAM_TX_ADDR_W-1:FEDATA_TX_BITS]  fe_txdma_taddr;
 wire [FEDATA_TX_WIDTH-1:0]             fe_txdma_tdata_rd_ext;
 
 if (ULTRA_SCALE) begin
-    if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 128 && FEDATA_TX_WIDTH == 128) begin
+    if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 128 && FEDATA_TX_WIDTH == 64) begin
+        // 128kB of RAM
+        blk_mem_gen_ntx_128_64_2 fifo_mem_tx (
+            .clka(hclk),
+            .ena(    txs_bram_en),
+            .wea(    |txs_bram_wbe),
+            .addra(  txs_bram_addr),
+            .dina(   txs_bram_wdata),
+            .douta(),
+
+            .clkb(dac_clk),
+            .enb(fe_txdma_ten),
+            .web(0),
+            .addrb(fe_txdma_taddr),
+            .dinb(0),
+            .doutb(fe_txdma_tdata_rd_ext)
+        );
+    end else if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 128 && FEDATA_TX_WIDTH == 128) begin
         // 128kB of RAM
         blk_mem_gen_ntx_128_128_2 fifo_mem_tx (
             .clka(hclk),
