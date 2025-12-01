@@ -20,7 +20,8 @@ module reconf_dsp_elem #(
 	parameter DSP_ID = 1,
 	parameter EXT_STALL = 0,
 	parameter BACKPRESSURE = 0,
-	parameter LAST = 0
+	parameter LAST = 0,
+	parameter ULTRA_SCALE = 0
 )(
 	input rst,
 	input clk,
@@ -72,28 +73,33 @@ localparam STAGES = 5;
 // P = C    + (A + D) * B
 // P = P    + (A + D) * B
 // P = Pcin + (A + D) * B
-// P = P + PCIN
+// P = P + PCIN             |   Pcin + (A + D) * B + P
 // P = 0 + A*B
 // P = C + PCIN
 // P = P + C
 //////////////////////////////
 
-localparam [14:0]
-	DSP_OP_ADpBx   = 15'b0000101_0000_010,
-	DSP_OP_CADpBxp = 15'b0110101_0000_010,
-	DSP_OP_PADpBxp = 15'b0100101_0000_010,
-	DSP_OP_IADpBxp = 15'b0010101_0000_010,
-	DSP_OP_PIp     = 15'b0010010_0000_001,
-	DSP_OP_ABx     = 15'b0000101_0000_000,
-	DSP_OP_CIp     = 15'b0011100_0000_001,
-	DSP_OP_PCp     = 15'b0001110_0000_001;
+localparam [16:0]
+	DSP_OP_ADpBx     = 17'b00_0_0000101_0000_010,
+	DSP_OP_CADpBxp   = 17'b00_0_0110101_0000_010,
+	DSP_OP_PADpBxp   = 17'b00_0_0100101_0000_010,
+	DSP_OP_IADpBxp   = 17'b00_0_0010101_0000_010,
+	DSP_OP_PIp       = 17'b00_0_0010010_0000_001,
+	DSP_OP_ABx       = 17'b00_0_0000101_0000_000,
+	DSP_OP_CIp       = 17'b00_0_0011100_0000_001,
+	DSP_OP_PCp       = 17'b00_0_0001110_0000_001,
+	DSP_OP_PIADpBxpp = 17'b01_0_0010101_0000_010; //Available only on UltraScale devices
 
 localparam CMD_WIDTH_EX = 3;
 
-localparam [15 * (1 << CMD_WIDTH_EX) - 1 : 0] DSP_ALL_CMDS = { DSP_OP_PCp, DSP_OP_CIp, DSP_OP_ABx, DSP_OP_PIp, DSP_OP_IADpBxp, DSP_OP_PADpBxp, DSP_OP_CADpBxp, DSP_OP_ADpBx };
 
-localparam [(1 << CMD_WIDTH_EX) - 1 : 0]      DSP_LOAD_C   = {       1'b1,       1'b1,       1'b0,       1'b0,           1'b0,           1'b0,           1'b1,        1'b0  };
-localparam [(1 << CMD_WIDTH_EX) - 1 : 0]      DSP_LOAD_AD  = {       1'b0,       1'b0,       1'b1,       1'b0,           1'b1,           1'b1,           1'b1,        1'b1  };
+localparam [17 * (1 << CMD_WIDTH_EX) - 1 : 0] DSP_ALL_CMDS = { DSP_OP_PCp,     DSP_OP_CIp,     DSP_OP_ABx,     ULTRA_SCALE ? DSP_OP_PIADpBxpp : DSP_OP_PIp,
+                                                               DSP_OP_IADpBxp, DSP_OP_PADpBxp, DSP_OP_CADpBxp, DSP_OP_ADpBx };
+
+localparam [(1 << CMD_WIDTH_EX) - 1 : 0]      DSP_LOAD_C   = { 1'b1,           1'b1,           1'b0,           1'b0,
+                                                               1'b0,           1'b0,           1'b1,           1'b0  };
+localparam [(1 << CMD_WIDTH_EX) - 1 : 0]      DSP_LOAD_AD  = { 1'b0,           1'b0,           1'b1,           ULTRA_SCALE ? 1'b1             : 1'b0,
+                                                               1'b1,           1'b1,           1'b1,           1'b1  };
 
 
 // Wait for data to be availble
@@ -139,12 +145,12 @@ always @(posedge clk) begin
   end
 end
 wire [CMD_WIDTH_EX - 1:0]   dsp_cmd_raw = (FIFO_PIPELINE) ? dsp_cmd_s0 : exe_cmd_ex;
-wire [14:0]                 dsp_cmd;
+wire [16:0]                 dsp_cmd;
 
 genvar i;
 generate
-for (i = 0; i < 15; i = i + 1) begin
-	assign dsp_cmd[i] = DSP_ALL_CMDS[15 * dsp_cmd_raw + i];
+for (i = 0; i < 17; i = i + 1) begin
+	assign dsp_cmd[i] = DSP_ALL_CMDS[17 * dsp_cmd_raw + i];
 end
 endgenerate
 
@@ -218,7 +224,7 @@ end
 wire dsp_tag =  (FIFO_PIPELINE) ? data_valid_strobe : exe_pp_l;
 
 localparam DSP_WIDTH_PA = 30;
-localparam DSP_WIDTH_PD = 25;
+localparam DSP_WIDTH_PD = ULTRA_SCALE ? 27 : 25;
 localparam DSP_WIDTH_PB = 18;
 localparam DSP_WIDTH_PC = 48;
 localparam DSP_WIDTH_PP = 48;
@@ -252,7 +258,34 @@ wire [DSP_WIDTH_PP-1:0] dsp_out_data;
 // 3:
 //   tmp_p  <= pcin/c/m
 
+if (ULTRA_SCALE) begin
+dsp48e2_pipeline #(.ID(DSP_ID), .NO_STALL(!BACKPRESSURE)) dsp(
+	.clk(clk),
+	.rst(rst),
 
+	.s_stall_n(wait_data_n),
+
+	.s_adb_data({dsp_a, dsp_d, dsp_b}),
+	.s_adb_valid(wait_data_n),
+	.s_adb_cmd(dsp_cmd[16:0]),
+	.s_adb_tag(dsp_tag),
+
+	// Async C update
+	.s_c_data(dsp_c),
+	.s_c_valid((DSP_C_P) ? dsp_p_svalid[2] : 1'b0),
+
+	.m_p_data(dsp_out_data),
+	.m_p_valid(dsp_ovalid_data[ch]),
+	.m_p_tag(dsp_out_tag[ch]),
+	.m_p_tv(dsp_ovt[ch]),
+
+	.m_p_svalid(dsp_p_svalid[4 * (ch + 1) - 1 : 4 * ch]),
+
+	// Cascase
+	.dspcasc_p_o( pcout_data[WIDTH_P * (ch + 1) - 1 : WIDTH_P * ch] ),
+	.dspcasc_p_i( pcin_data[WIDTH_P * (ch + 1) - 1 : WIDTH_P * ch] )
+);
+end else begin
 dsp48e1_pipeline #(.ID(DSP_ID), .NO_STALL(!BACKPRESSURE)) dsp(
 	.clk(clk),
 	.rst(rst),
@@ -279,6 +312,7 @@ dsp48e1_pipeline #(.ID(DSP_ID), .NO_STALL(!BACKPRESSURE)) dsp(
 	.dspcasc_p_o( pcout_data[WIDTH_P * (ch + 1) - 1 : WIDTH_P * ch] ),
 	.dspcasc_p_i( pcin_data[WIDTH_P * (ch + 1) - 1 : WIDTH_P * ch] )
 );
+end
 
 // signed data, MSB
 // FIXME correct OWIDTH ------------------------------------------------@

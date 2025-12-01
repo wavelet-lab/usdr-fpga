@@ -5,7 +5,7 @@
 // USDR PROJECT
 // CLEAN
 //
-module dsp48e1_pipeline #(
+module dsp48e2_pipeline #(
 	parameter TAG_WIDTH = 1'b1,
 	parameter RESET_DSP48 = 1'b0,
 	parameter [7:0] ID = 0,
@@ -17,9 +17,9 @@ module dsp48e1_pipeline #(
 
 	input                  s_stall_n,
 
-	input [30+25+18-1:0]   s_adb_data,
+	input [30+27+18-1:0]   s_adb_data,
 	input                  s_adb_valid,
-	input [14:0]           s_adb_cmd,
+	input [16:0]           s_adb_cmd,
 	input [TAG_WIDTH-1:0]  s_adb_tag,
 
 	// Async C update
@@ -37,12 +37,12 @@ module dsp48e1_pipeline #(
 	output [47:0]          dspcasc_p_o,
 	input  [47:0]          dspcasc_p_i
 );
-//    0010010_0000_001    P = P + PCIN      0901
-//    0100101_0000_010    P = P + (D+A)*B   1282
-//    0110101_0000_010    P = C + (D+A)*B   1A82
-//    0000101_0000_010    P = 0 + (D+A)*B   0282
+//    01_0010101_0000_010    P = P + PCIN + (D+A)*B  0901   //0010010_0000_001
+//    00_0100101_0000_010    P = P + (D+A)*B         1282
+//    00_0110101_0000_010    P = C + (D+A)*B         1A82
+//    00_0000101_0000_010    P = 0 + (D+A)*B         0282
 //
-//    0000101_0000_000    P = 0 + A*B       0280
+//    00_0000101_0000_000    P = 0 + A*B       0280
 //
 //  0_0001100_0000_001    P = C + 0 + 0     0601
 //  000_0110_0000_0001
@@ -53,10 +53,10 @@ module dsp48e1_pipeline #(
 //                 010 : D + A
 //                 011 : D - A
 // alu:
-//            0000 : Z + X + Y + CIN
-//            0001 : -Z + X + Y + CIN - 1
-//            0010 : -Z - X - Y - CIN - 1
-//            0011 : Z - (X + Y + CIN)
+//            0000 : Z + W + X + Y + CIN
+//            0001 : -Z + W + X + Y + CIN - 1
+//            0010 : -Z - W - X - Y - CIN - 1
+//            0011 : Z - (W + X + Y + CIN)
 // opmode X:
 //  xxx_xx_00 : 0
 //  xxx_01_01 : M
@@ -75,6 +75,9 @@ module dsp48e1_pipeline #(
 //  100_10_00 : P for MACC
 //  101_xx_xx : PCIN >> 17
 //  110_xx_xx : P >> 17
+// opmode W:
+//  00        : 0
+//  01        : P
 //
 //    1         7           4        3
 // { round_opmode[6:0]_alu[3:0]_inmode[2:0]
@@ -91,8 +94,8 @@ assign     m_p_valid = stage_valid_r[4];
 assign     m_p_svalid = stage_valid;
 
 //reg [2:0]  INMODE_e0;
-reg [10:0] OPMODE_ALUMODE_e0;
-reg [10:0] OPMODE_ALUMODE_e1;
+reg [12:0] OPMODE_ALUMODE_e0;
+reg [12:0] OPMODE_ALUMODE_e1;
 reg        ROUND_MUL_e0;
 reg        ROUND_MUL_e1;
 
@@ -118,7 +121,7 @@ always @(posedge clk) begin
 
 		if (stage_valid[0]) begin
 			//INMODE_e0         <= s_adb_cmd[2:0];
-			OPMODE_ALUMODE_e0 <= s_adb_cmd[13:3];
+			OPMODE_ALUMODE_e0 <= { s_adb_cmd[16:15], s_adb_cmd[13:3] };
 			ROUND_MUL_e0      <= s_adb_cmd[14];
 			TAG_e0            <= s_adb_tag;
 			//$display("%g: DSP48.%0d.0 IN=%b OP=%b  A=%x D=%x B=%x", $time, ID, s_adb_cmd[2:0], s_adb_cmd[13:3], s_adb_data[29+25+18:25+18], s_adb_data[24+18:18], s_adb_data[17:0]);
@@ -144,10 +147,10 @@ end
 
 
 
-DSP48E1 #(
+DSP48E2 #(
 	.A_INPUT("DIRECT"),               // Selects A input source, "DIRECT" (A port) or "CASCADE" (ACIN port)
 	.B_INPUT("DIRECT"),               // Selects B input source, "DIRECT" (B port) or "CASCADE" (BCIN port)
-	.USE_DPORT("TRUE"),               // Select D port usage (TRUE or FALSE)
+	.AMULTSEL("AD"),                  //
 	.USE_MULT("MULTIPLY"),            // Select multiplier usage ("MULTIPLY", "DYNAMIC", or "NONE")
 	.USE_SIMD("ONE48"),               // SIMD selection ("ONE48", "TWO24", "FOUR12")
 	.AUTORESET_PATDET("NO_RESET"),    // "NO_RESET", "RESET_MATCH", "RESET_NOT_MATCH"
@@ -193,15 +196,15 @@ DSP48E1 #(
 
 	.ALUMODE(OPMODE_ALUMODE_e1[3:0]), // 4-bit input: ALU control input
 	.CARRYINSEL(ROUND_MUL_e1 ? 3'b110 : 3'b000),              // 3-bit input: Carry select input
-	.CLK(clk),                        // 1-bit input: Clock input
-	.INMODE({1'b0, s_adb_cmd[2:0], 1'b0}), // 5-bit input: INMODE control input
-	.OPMODE(OPMODE_ALUMODE_e1[10:4]), // 7-bit input: Operation mode input
+	.CLK(clk),                              // 1-bit input: Clock input
+	.INMODE({1'b0, s_adb_cmd[2:0], 1'b0}),  // 5-bit input: INMODE control input
+	.OPMODE(OPMODE_ALUMODE_e1[12:4]),       // 9-bit input: Operation mode input
 
-	.A(s_adb_data[29+25+18:25+18]),   // 30-bit input: A data input
+	.A(s_adb_data[29+27+18:27+18]),   // 30-bit input: A data input
 	.B(s_adb_data[17:0]),             // 18-bit input: B data input
 	.C(s_c_data),                     // 48-bit input: C data input
 	.CARRYIN(1'b0),                   // 1-bit input: Carry input signal
-	.D(s_adb_data[24+18:18]),         // 25-bit input: D data input
+	.D(s_adb_data[26+18:18]),         // 27-bit input: D data input
 
 	.CEA1(dspr_stall_n && 1'b0),                      // 1-bit input: Clock enable input for 1st stage AREG
 	.CEA2(dspr_stall_n && stage_valid[0]),            // 1-bit input: Clock enable input for 2nd stage AREG

@@ -12,7 +12,8 @@ module reconf_dsp_fir #(
 	parameter SEQUENCER_DEEPBITS = 5,
 	parameter BACKPRESSURE = 0,
 	parameter HAS_C_PORT = 1,
-	parameter EXTERNAL_OMUX = 0
+	parameter EXTERNAL_OMUX = 0,
+	parameter ULTRA_SCALE = 0
 )(
 	input rst,
 	input clk,
@@ -148,7 +149,8 @@ for (i = 0; i < STAGES; i = i + 1) begin: dsp_stage
 		.DSP_ID(i),
 		.EXT_STALL(1),
 		.BACKPRESSURE(BACKPRESSURE),
-		.LAST(i == STAGES - 1)
+		.LAST(i == STAGES - 1),
+		.ULTRA_SCALE(ULTRA_SCALE)
 	) element (
 		.rst(rst /* cfg_rst */),
 		.clk(clk),
