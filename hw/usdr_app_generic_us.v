@@ -25,6 +25,7 @@ module usdr_app_generic_us #(
     parameter EGPIO_ALT_MODE1     = 0,
     parameter UART_PRESENT        = 0,
     parameter ULTRA_SCALE         = 1,
+    parameter ULTRA_SCALE_CLI_TAG = 0,
     parameter USB2_PRESENT        = 0,
     parameter USDR_PID            = 0,
     parameter TX_FRAME_LENGTH     = 32,
@@ -84,6 +85,13 @@ module usdr_app_generic_us #(
     input          pcieus_rq_seq_num_vld0,
     input [5:0]    pcieus_rq_seq_num1,
     input          pcieus_rq_seq_num_vld1,
+    input [3:0]    pcie_tfc_nph_av,
+    input [3:0]    pcie_tfc_npd_av,
+    input [7:0]    pcie_rq_tag0,
+    input          pcie_rq_tag_vld0,
+    input [7:0]    pcie_rq_tag1,
+    input          pcie_rq_tag_vld1,
+    input [3:0]    pcie_rq_tag_av,
 
     input [7:0]    cfg_fc_ph,
     input [11:0]   cfg_fc_pd,
@@ -292,6 +300,7 @@ assign hclk_axis_rq_event_exp_tready  = hclk_axis_rq_event_comb_tready;
 assign hclk_axis_rq_event_comb_tvalid = hclk_axis_rq_event_exp_tvalid;
 assign hclk_axis_rq_event_comb_tlast  = hclk_axis_rq_event_exp_tlast;
 
+`define FULLY_COMPATIBLE_256
 `ifdef FULLY_COMPATIBLE_256
 wire a_sw;
 assign hclk_axis_rq_event_comb_tdata  = (C_DATA_WIDTH == 256) ? { hclk_axis_rq_event_exp_tdata, hclk_axis_rq_event_exp_tdata } : hclk_axis_rq_event_exp_tdata;
@@ -1891,6 +1900,7 @@ pcie_rq_rc_al_mem #(
     .MEM_TAG(PCIE_TAG_BITS),
     .DATA_BITS(DATA_BITS), // 3 - 64 bit, 4 - 128 bit, 5 - 256 bit
     .ULTRA_SCALE(ULTRA_SCALE),
+    .ULTRA_SCALE_CLI_TAG(ULTRA_SCALE_CLI_TAG),
     .EN64BIT(0), // for 7-Series,
     .PCIE_TAG_BITS(5),
     .STAT_CNTR_WIDTH(STAT_CNTR_WIDTH)
@@ -1914,6 +1924,14 @@ pcie_rq_rc_al_mem #(
     .cfg_pcie_reqid(cfg_completer_id),
     .cfg_pcie_attr(2'b00),
     .pcie7s_tx_buf_av(pcie7s_tx_buf_av),
+    .pcie_tfc_npd_av(pcie_tfc_npd_av),
+    .pcie_tfc_nph_av(pcie_tfc_nph_av),
+    .pcie_rq_tag0(pcie_rq_tag0),
+    .pcie_rq_tag1(pcie_rq_tag1),
+    .pcie_rq_tag_av(pcie_rq_tag_av),
+    .pcie_rq_tag_vld0(pcie_rq_tag_vld0),
+    .pcie_rq_tag_vld1(pcie_rq_tag_vld1),
+
 
     `AXIS_RVDLKU_PORT_CONN(m_axis_rq_t, hclk_axis_rq_txdma_t),
     `AXIS_RVDLKU_PORT_CONN(s_axis_rc_t, m_axis_rc_t),

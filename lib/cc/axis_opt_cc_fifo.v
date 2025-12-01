@@ -15,6 +15,7 @@ module axis_opt_cc_fifo #(
   parameter ULTRA_SCALE = 0,
   parameter CC_DATA_PIPELINED = 1,
   parameter DIRECT_DATA_PIPELINED = 0,
+  parameter DIRECT_PIPE_PASSTHROUGH = 0,
   parameter CC_RX_VALID_PIPELINE_S = 1'b0
 ) (
   input                            rx_clk,
@@ -121,7 +122,7 @@ end
 endgenerate
 
 localparam DATA_PIPELINE = CLK_CC && CC_DATA_PIPELINED || CLK_CC && (DEEP == 0) || !CLK_CC && DIRECT_DATA_PIPELINED;
-axis_opt_pipeline #(.WIDTH(WIDTH), .PIPELINE(DATA_PIPELINE), .REG_READY(1'b0)) out (
+axis_opt_pipeline #(.WIDTH(WIDTH), .PIPELINE(DATA_PIPELINE), .REG_READY(1'b0), .PIPE_PASSTHROUGH(DIRECT_PIPE_PASSTHROUGH)) out (
     .clk(tx_clk),
     .rst(tx_rst),
 

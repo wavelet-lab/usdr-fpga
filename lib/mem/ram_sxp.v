@@ -39,8 +39,8 @@ ram_sxp_sym #(
 genvar i;
 generate
 
-localparam SLICE_BITS_US = (MODE_SDP) ? (ADDR_WIDTH <= 5 ? 14 : 7) : (ADDR_WIDTH <= 5 ? 16 : 8);
-localparam SLICE_BITS_7S = (MODE_SDP) ? (ADDR_WIDTH <= 5 ? 6 : 3)  : (ADDR_WIDTH <= 5 ? 8 : 4);
+localparam SLICE_BITS_US = (MODE_SDP) ? (ADDR_WIDTH <= 5 ? 14 : ADDR_WIDTH == 6 ? 7 : 1) : (ADDR_WIDTH <= 5 ? 16 : 8);
+localparam SLICE_BITS_7S = (MODE_SDP) ? (ADDR_WIDTH <= 5 ? 6 : 3)                        : (ADDR_WIDTH <= 5 ? 8 : 4);
 
 localparam SLICE_BITS = (ULTRA_SCALE) ? SLICE_BITS_US : SLICE_BITS_7S;
 localparam COUNT      = (DATA_WIDTH + SLICE_BITS - 1) / SLICE_BITS;
@@ -195,6 +195,26 @@ for (i = 0; i < COUNT; i=i+1) begin
 
         .WCLK(wclk),
         .WE(we)
+    );
+  end else if (ULTRA_SCALE == 1 && ADDR_WIDTH == 7 && MODE_SDP) begin
+    RAM128X1D #(.INIT(128'h0)) RAM128X1D_SDP (
+        .SPO(),                   // 	Output 	1 	Read/Write port data output addressed by A
+        .DPO(di[SLICE_BITS*i+0]), // 	Output 	1 	Read port data output addressed by DPRA
+        .D(do[SLICE_BITS*i+0]),   // 	Input 	1 	Write data input addressed by A
+        .A(waddr),                // 	Input 	7 	Read/Write port address bus
+        .DPRA(raddr),             // 	Input 	7 	Read port address bus
+        .WE(we),                  // 	Input 	1 	Write Enable
+        .WCLK(wclk)               // 	Input 	1 	Write clock (reads are asynchronous)
+    );
+  end else if (ULTRA_SCALE == 1 && ADDR_WIDTH == 8 && MODE_SDP) begin
+    RAM256X1D #(.INIT(256'h0)) RAM256X1D_SDP (
+        .SPO(),                   // 	Output 	1 	Read/Write port data output addressed by A
+        .DPO(do[SLICE_BITS*i+0]), // 	Output 	1 	Read port data output addressed by DPRA
+        .D(di[SLICE_BITS*i+0]),   // 	Input 	1 	Write data input addressed by A
+        .A(waddr),                // 	Input 	8 	Read/Write port address bus
+        .DPRA(raddr),             // 	Input 	8 	Read port address bus
+        .WE(we),                  // 	Input 	1 	Write Enable
+        .WCLK(wclk)               // 	Input 	1 	Write clock (reads are asynchronous)
     );
   end else begin
     unsupported_dpram_configuration assert_dpram(.DI(di), .DO(do));

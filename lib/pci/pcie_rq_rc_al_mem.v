@@ -11,6 +11,7 @@ module pcie_rq_rc_al_mem #(
     parameter DATA_BITS = 4, // 3 - 64 bit, 4 - 128 bit, 5 - 256 bit
     parameter DATA_WIDTH_ = 8 << DATA_BITS,
     parameter ULTRA_SCALE = 0,
+    parameter ULTRA_SCALE_CLI_TAG = 0,
     parameter KEEP_WIDTH_ = DATA_WIDTH_/32,
     parameter USER_WIDTH_ = ULTRA_SCALE ? 62 : 1,
     parameter EN64BIT = 0, // for 7-Series,
@@ -37,6 +38,13 @@ module pcie_rq_rc_al_mem #(
     input [15:0]                               cfg_pcie_reqid,
     input [1:0]                                cfg_pcie_attr,
     input [5:0]                                pcie7s_tx_buf_av,
+    input [3:0]                                pcie_tfc_nph_av,
+    input [3:0]                                pcie_tfc_npd_av,
+    input [7:0]                                pcie_rq_tag0,
+    input                                      pcie_rq_tag_vld0,
+    input [7:0]                                pcie_rq_tag1,
+    input                                      pcie_rq_tag_vld1,
+    input [3:0]                                pcie_rq_tag_av,
 
     // AXIs PCIe RQ
     input                                      m_axis_rq_tready,
@@ -45,10 +53,6 @@ module pcie_rq_rc_al_mem #(
     output reg                                 m_axis_rq_tlast,
     output reg                                 m_axis_rq_tvalid,
     output     [USER_WIDTH_-1:0]               m_axis_rq_tuser,
-    //input  [7:0] pcie_rq_tag0,
-    //input        pcie_rq_tag_vld0,
-    //input  [1:0] pcie_tfc_nph_av,
-    //input  [1:0] pcie_tfc_npd_av,
 
     // AXIS PCIe RC
     output                                     s_axis_rc_tready,
@@ -71,6 +75,9 @@ module pcie_rq_rc_al_mem #(
     input [3:0]                                extra_data
 );
 
+localparam DELAYED_FREE_TAG = ULTRA_SCALE_CLI_TAG && ULTRA_SCALE;
+localparam CORE_TAG_BITS    = ULTRA_SCALE_CLI_TAG ? PCIE_TAG_BITS : 8;
+
 // For UltraScale use 128/256bit Address-Align mode with External Tag Management
 // For 7-Series use 64bit interface (with externel CPL/MEM stream separation)
 
@@ -82,20 +89,31 @@ localparam CPL_DATA_FMT_TYPE =      7'b10_01010;   // 3DW + data
 //memrd32 // memrd64
 
 
-wire [PCIE_TAG_BITS-1:0] tag_alloc_data;
+wire [CORE_TAG_BITS-1:0] tag_alloc_data;
 wire                     tag_alloc_ready;
 wire                     tag_alloc_valid;
 
-wire [PCIE_TAG_BITS-1:0] tag_free_data;
+wire [CORE_TAG_BITS-1:0] tag_free_data;
 wire                     tag_free_valid;
 wire                     tag_free_ready;
 
+wire [CORE_TAG_BITS:0]   _tags_avail;
+
+wire [LOCAL_ADDR_WIDTH - DATA_BITS + MEM_TAG -1:0] rq_aux_data_alloc = { s_tcq_laddr + s_tcq_length + 1'b1, s_tcq_tag };
+wire [LOCAL_ADDR_WIDTH - DATA_BITS + MEM_TAG -1:0] tag_store_data;
+wire                                               tag_store_strobe;
+
+wire unexpected_tag;
+
+generate
+if (ULTRA_SCALE_CLI_TAG || !ULTRA_SCALE) begin
 tag_allocator #(.PCIE_TAG_BITS(PCIE_TAG_BITS)) tag_alloc (
     .clk(clk),
     .rst(rst),
 
     .core_ready(core_ready),
     .notags(stat_notlp),
+    .tag_fifo_used(_tags_avail),
 
     .m_tag_alloc_data(tag_alloc_data),
     .m_tag_alloc_ready(tag_alloc_ready),
@@ -105,22 +123,51 @@ tag_allocator #(.PCIE_TAG_BITS(PCIE_TAG_BITS)) tag_alloc (
     .s_tag_free_valid(tag_free_valid),
     .s_tag_free_ready(tag_free_ready)
 );
+assign tag_store_strobe = tag_alloc_valid && tag_alloc_ready;
+assign tag_store_data   = rq_aux_data_alloc;
+end else begin
+wire fifo_q_ready;
+wire fifo_q_e;
+wire fifo_tag_data_valid;
+assign tag_alloc_valid = fifo_q_ready && (pcie_rq_tag_av > 0);
+
+axis_fifo #(.DEEP(16), .WIDTH(LOCAL_ADDR_WIDTH - DATA_BITS + MEM_TAG), .EXTRA_REG(1'b1)) tag_rq_fifo (
+    .clk(clk),
+    .rst(rst),
+
+    .s_rx_tdata(rq_aux_data_alloc),
+    .s_rx_tvalid(tag_alloc_ready),
+    .s_rx_tready(fifo_q_ready),
+
+    .m_tx_tdata(tag_store_data),
+    .m_tx_tvalid(fifo_tag_data_valid),
+    .m_tx_tready(tag_store_strobe),
+
+    .fifo_full(fifo_q_e),
+    .fifo_used()
+);
+assign tag_alloc_data = pcie_rq_tag0;
+assign tag_store_strobe = pcie_rq_tag_vld0;
+assign _tags_avail = {fifo_q_e, pcie_rq_tag_av };
+assign unexpected_tag = !fifo_tag_data_valid && tag_store_strobe;
+end
+endgenerate
 
 // Allocation requests
-wire [PCIE_TAG_BITS-1:0]            completion_pcie_tag;
+wire [CORE_TAG_BITS-1:0]            completion_pcie_tag;
 wire [LOCAL_ADDR_WIDTH-1:DATA_BITS] completion_addr;
 wire [MEM_TAG-1:0]                  completion_utag;
 
 ram_sxp #(
     .DATA_WIDTH(LOCAL_ADDR_WIDTH - DATA_BITS + MEM_TAG),
-    .ADDR_WIDTH(PCIE_TAG_BITS),
+    .ADDR_WIDTH(CORE_TAG_BITS),
     .ULTRA_SCALE(ULTRA_SCALE),
     .MODE_SDP(1)
 ) req_progress (
    .wclk(clk),
-   .we(tag_alloc_valid && tag_alloc_ready),
+   .we(tag_store_strobe),
    .waddr(tag_alloc_data),
-   .wdata({ s_tcq_laddr + s_tcq_length + 1'b1, s_tcq_tag }),
+   .wdata(tag_store_data),
 
    .raddr(completion_pcie_tag),
    .rdata({ completion_addr, completion_utag })
@@ -178,8 +225,8 @@ always @(posedge clk) begin
                     m_axis_rq_tdata[74:64]   <= pcie_length;
                     m_axis_rq_tdata[78:75]   <= 4'b0000;        // MemRd
                     m_axis_rq_tdata[79]      <= 1'b0;           // Poisoned Request
-                    m_axis_rq_tdata[95:80]   <= cfg_pcie_reqid; // Requester ID
-                    m_axis_rq_tdata[103:96]  <= pcie_tag;       // Tag
+                    m_axis_rq_tdata[95:80]   <= 16'h0000; //cfg_pcie_reqid; // Requester ID
+                    m_axis_rq_tdata[103:96]  <= ULTRA_SCALE_CLI_TAG ? pcie_tag : 8'h00;       // Tag
                     m_axis_rq_tdata[119:104] <= 16'h0000;       // Completer ID
                     m_axis_rq_tdata[120]     <= 1'b0;           // Request ID Enable (must be 0 for endpoint)
                     m_axis_rq_tdata[123:121] <= 3'b000;         // TC
@@ -216,7 +263,8 @@ always @(posedge clk) begin
     end
 end
 
-wire tx_buffer_ready   = ULTRA_SCALE ? 1'b1 : (pcie7s_tx_buf_av > 2);
+wire us_buffer_ready   = (pcie_tfc_nph_av != 0); // && (pcie_tfc_npd_av != 0);
+wire tx_buffer_ready   = ULTRA_SCALE ? 1'b1 && us_buffer_ready : (pcie7s_tx_buf_av > 2);
 assign tag_alloc_ready = s_tcq_valid && (ULTRA_SCALE ? 1'b1 : req_stage == REQ_TAG_ALLOC_DW0) && !m_axis_rq_tvalid && tx_buffer_ready;
 
 
@@ -271,15 +319,19 @@ reg [31:0] data_cached;
 reg        last_cpl_cached;
 reg [2:0]  cpld_status_cached;
 
-assign tag_free_data  = completion_pcie_tag;
+reg [CORE_TAG_BITS-1:0] free_tag_data;
+reg                     free_tag_valid;
+
+assign tag_free_data  = DELAYED_FREE_TAG ? free_tag_data : completion_pcie_tag;
 
 // Assume assertation of s_axis_rc_tlast in HDW1 is an abnormal transaction finilization;
 // however, this maight be a valid transaction with just a single payload DW
 // that we ignore here as a minimal requested transfer is 64bit
 //
-assign tag_free_valid = s_axis_rc_tvalid && s_axis_rc_tready && (ULTRA_SCALE ?
+assign tag_free_valid = DELAYED_FREE_TAG ? free_tag_valid : s_axis_rc_tvalid && s_axis_rc_tready && (ULTRA_SCALE ?
     cpl_state == ST_CPL_HDR  && cpl_last_us :
     cpl_state == ST_CPL_HDW1 && (last_cpl_cached || s_axis_rc_tlast));
+
 
 // TODO: cpld_status_us parse
 reg [STAT_CNTR_WIDTH-1:0] comp_no_data;
@@ -289,7 +341,9 @@ always @(posedge clk) begin
         cpl_state    <= ST_CPL_HDR;
         s_tcq_cvalid <= 1'b0;
         comp_no_data <= 0;
+        free_tag_valid <= 1'b0;
     end else begin
+        free_tag_valid <= 1'b0;
 
         if (s_tcq_cvalid && s_tcq_cready) begin
             s_tcq_cvalid <= 1'b0;
@@ -303,12 +357,23 @@ always @(posedge clk) begin
                 m_al_wtag         <= completion_utag;
 
                 cpl_state[1]      <= s_axis_rc_tlast ? 1'b0 : 1'b1;
+                free_tag_data     <= completion_pcie_tag;
+
+                if (s_axis_rc_tlast) begin
+                    comp_no_data   <= comp_no_data + 1'b1;
+                    free_tag_valid <= cpl_last_us;
+                end
             end else if (cpl_state[1] == 1'b1 && s_axis_rc_tvalid && s_axis_rc_tready) begin
                 m_al_wraddr       <= m_al_wraddr + 1'b1;
 
                 if (s_axis_rc_tlast) begin
-                    s_tcq_cvalid  <= last_cpl_cached;
-                    s_tcq_ctag    <= m_al_wtag;
+                    s_tcq_cvalid   <= last_cpl_cached;
+                    s_tcq_ctag     <= m_al_wtag;
+                    free_tag_valid <= last_cpl_cached;
+                    
+                    if (s_axis_rc_tuser[42]) begin
+                        comp_no_data   <= comp_no_data + 1'b1;
+                    end
                 end
 
                 cpl_state[1]      <= s_axis_rc_tlast ? 1'b0 : 1'b1;
@@ -379,5 +444,40 @@ assign m_al_wvalid      = (cpl_state == ST_CPL_DATA) && s_axis_rc_tvalid;
 assign s_axis_rc_tready = (cpl_state == ST_CPL_DATA) ? (!m_al_wvalid || m_al_wready) : !m_al_wvalid && (!s_tcq_cvalid || s_tcq_cready);
 
 assign stat_cpl_nodata  = comp_no_data;
+
+wire interestig =  s_axis_rc_tuser[42] && cpl_state[1] == 1'b1 && s_axis_rc_tvalid && s_axis_rc_tready && s_axis_rc_tlast ||
+    unexpected_tag || tag_alloc_valid && tag_alloc_ready || pcie_rq_tag_vld0 || (cpl_state[1] == 1'b0 && s_axis_rc_tvalid && s_axis_rc_tready); 
+
+`ifdef DEBUG_RQ
+ila_3 ila_3(
+    .clk(clk),
+    .probe0(m_axis_rq_tvalid | 1'b0),
+    .probe1(m_axis_rq_tready),
+    .probe2(pcie_tag), // 5 alloc
+    .probe3(cpl_state[1]),
+    .probe4(s_axis_rc_tvalid),
+    .probe5(s_axis_rc_tready),
+    .probe6(s_tcq_cvalid),
+    .probe7(s_axis_rc_tlast),
+    .probe8(cpl_last_us),
+    .probe9(tag_alloc_ready),
+    .probe10(s_tcq_ctag), //5
+    .probe11(s_tcq_valid),
+    .probe12(s_tcq_ready),
+    .probe13( error_code_us ), //5
+    .probe14(s_tcq_cready | 1'b0),
+    .probe15(tag_free_valid | 1'b0),
+    .probe16(_tags_avail | 1'b0),
+    .probe17(cpl_last_us),
+    .probe18(m_al_wtag), //UserID 5 rb
+    .probe19(completion_pcie_tag), //PCIeID 5 rb
+    .probe20(s_tcq_tag), //UseID 5 alloc
+    .probe21(tag_alloc_valid),
+    .probe22(interestig),
+    .probe23(pcie_rq_tag0),
+    .probe24(pcie_rq_tag_vld0),
+    .probe25({pcie_tfc_nph_av, pcie_tfc_npd_av})
+);
+`endif
 
 endmodule
