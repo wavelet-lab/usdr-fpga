@@ -1226,6 +1226,28 @@ if (ULTRA_SCALE) begin
             .dinb(fe_rxdma_tdata_wr),
             .doutb()
         );
+    end else if (RAM_RX_ADDR_W == 16 && WIDTH_RX == 256 && WIDTH_FE_RX == 256) begin
+        // 64kB, direct map
+        (* KEEP="TRUE" *)
+        blk_mem_gen_nrx_256_256 fifo_mem_rx (
+            .clka(hclk),
+            .rsta(hrst),
+            .ena(rxdma_bram_en),
+            .wea(rxdma_bram_wbe),
+            .addra(rxdma_bram_addr),
+            .dina(rxdma_bram_data_wr),
+            .douta(rxdma_bram_data_rd),
+
+            .clkb(adc_clk),
+            .rstb(adc_rst),
+            .enb(fe_rxdma_ten),
+            .web(fe_rxdma_twbe),
+            .addrb(fe_rxdma_taddr),
+            .dinb(fe_rxdma_tdata_wr),
+            .doutb()
+        );
+    end else begin
+        unsupported_memory_configuration fifo_mem_rx (.clka(hclk), .rsta(hrst) );
     end
 end else begin
     blk_mem_gen_nrx fifo_mem_rx (
