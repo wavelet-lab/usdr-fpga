@@ -221,7 +221,7 @@ localparam ADC_ASYNC_CLK = (HUL_BUS_SPEED != PUL_BUS_SPEED) || USE_EXT_ADC_CLK;
 
 // pclk is default clock for FE ?  todo the same as ADC
 wire dac_clk    = (USE_EXT_DAC_CLK) ? dac_clk_ext : hclk;
-wire dac_rst_fe = (USE_EXT_DAC_CLK) ? dac_rst_ext : hclk;
+wire dac_rst_fe = (USE_EXT_DAC_CLK) ? dac_rst_ext : hrst;
 localparam DAC_ASYNC_CLK = (HUL_BUS_SPEED != PUL_BUS_SPEED) || USE_EXT_DAC_CLK;
 
 
