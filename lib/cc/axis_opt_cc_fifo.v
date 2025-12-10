@@ -16,7 +16,8 @@ module axis_opt_cc_fifo #(
   parameter CC_DATA_PIPELINED = 1,
   parameter DIRECT_DATA_PIPELINED = 0,
   parameter DIRECT_PIPE_PASSTHROUGH = 0,
-  parameter CC_RX_VALID_PIPELINE_S = 1'b0
+  parameter CC_RX_VALID_PIPELINE_S = 1'b0,
+  parameter KEEP_FIFO = 0
 ) (
   input                            rx_clk,
   input                            rx_rst,
@@ -112,6 +113,19 @@ end else if (CLK_CC) begin
         assign tx_tdata = inlatch;
     end
 
+end else if (KEEP_FIFO) begin
+    axis_fifo #(.WIDTH(WIDTH), .DEEP(DEEP)) sync_fifo (
+      .clk(tx_clk),
+      .rst(tx_rst),
+
+      .s_rx_tvalid(s_rx_tvalid),
+      .s_rx_tready(s_rx_tready),
+      .s_rx_tdata(s_rx_tdata),
+
+      .m_tx_tdata(tx_tdata),
+      .m_tx_tvalid(tx_tvalid),
+      .m_tx_tready(tx_tready)
+    );
 end else begin
     if (!NO_DATA) begin
         assign tx_tdata    = s_rx_tdata;
