@@ -8,13 +8,14 @@ module data_packer #(
     parameter DATA_WIDTH = 16,
     parameter CH_COUNT = 16,
     parameter TAG_WIDTH = 1,
-    parameter NO_BACKPRESSURE = 0
+    parameter NO_BACKPRESSURE = 0,
+    parameter COMPACT_3X16 = 0
 ) (
   input                                 rst,
   input                                 clk,
 
   input                                 cfg_mode_12,
-  input                                 cfg_last_12_extra,
+  input                                 cfg_mode_3x16, // do 3x16 instead of 4x12 packing
 
   input [CH_COUNT * DATA_WIDTH - 1:0]   s_in_data,
   input [TAG_WIDTH - 1:0]               s_in_tag,
@@ -35,11 +36,15 @@ module data_packer #(
 localparam CH_COUNT_3_2 = 3  * ((CH_COUNT + 1) / 2);
 localparam CH_COUNT_1_2 = 1  * ((CH_COUNT + 1) / 2);
 
+wire                        pack_3x16_into_12 = cfg_mode_3x16 && COMPACT_3X16;
+
 wire [2  * CH_COUNT - 1:0]  packed_16_keep;
 wire [CH_COUNT_3_2  - 1:0]  packed_12_keep;
+wire [CH_COUNT_3_2  - 1:0]  packed_3x16_keep;
 
 wire [16 * CH_COUNT - 1:0]  packed_16;
 wire [12 * CH_COUNT - 1:0]  packed_12;
+wire [12 * CH_COUNT - 1:0]  packed_3x16;
 
 genvar i;
 generate
@@ -50,6 +55,12 @@ for (i = 0; i < CH_COUNT; i=i+1) begin
     assign packed_16_keep[2 * i + 1:2*i] = {2{s_in_keep[i]}};
 end
 
+for (i = 0; i < CH_COUNT / 8; i=i+1) begin
+    assign packed_3x16[96 * i + 95:96 * i]  = packed_16[128 * i + 95:128 * i];
+    assign packed_3x16_keep[12*i + 11:12*i] = packed_16_keep[16 * i + 11:16 * i];
+end
+
+
 for (i = 0; i < CH_COUNT; i=i+2) begin
     assign packed_12_keep[3 * i / 2 + 0] = s_in_keep[i + 0];
     assign packed_12_keep[3 * i / 2 + 1] = s_in_keep[i + 0];
@@ -58,6 +69,10 @@ for (i = 0; i < CH_COUNT; i=i+2) begin
     end
 end
 endgenerate
+
+
+wire [CH_COUNT_3_2  - 1:0]  sel_packed_12_keep = (pack_3x16_into_12) ? packed_3x16_keep : packed_12_keep;
+wire [12 * CH_COUNT - 1:0]  sel_packed_12      = (pack_3x16_into_12) ? packed_3x16      : packed_12;
 
 reg [8 * CH_COUNT - 1:0]    res_12;
 reg [1 * CH_COUNT - 1:0]    res_12_keep;
@@ -73,8 +88,8 @@ reg stall;
 
 assign s_in_ready = m_out_ready && (NO_BACKPRESSURE || !stall);
 
-wire mode_12_stage_1_ns = !packed_12_keep[CH_COUNT_1_2];
-wire mode_12_stage_2_ns = !packed_12_keep[CH_COUNT];
+wire mode_12_stage_1_ns = !sel_packed_12_keep[CH_COUNT_1_2];
+wire mode_12_stage_2_ns = !sel_packed_12_keep[CH_COUNT];
 
 
 always @(posedge clk) begin
@@ -131,43 +146,43 @@ always @(posedge clk) begin
 
             case (state)
             0: begin
-                m_out_data[12 * CH_COUNT - 1:0]             <= packed_12;
-                m_out_keep[CH_COUNT_3_2 - 1:0]              <= packed_12_keep;
+                m_out_data[12 * CH_COUNT - 1:0]             <= sel_packed_12;
+                m_out_keep[CH_COUNT_3_2 - 1:0]              <= sel_packed_12_keep;
                 m_out_keep[ 2 * CH_COUNT - 1:CH_COUNT_3_2]  <= 0;
             end
 
             1: begin
-                m_out_data[16 * CH_COUNT - 1:12 * CH_COUNT] <= packed_12[4 * CH_COUNT - 1:0];
-                m_out_keep[ 2 * CH_COUNT - 1:CH_COUNT_3_2]  <= packed_12_keep[CH_COUNT_1_2 - 1:0];
+                m_out_data[16 * CH_COUNT - 1:12 * CH_COUNT] <= sel_packed_12[4 * CH_COUNT - 1:0];
+                m_out_keep[ 2 * CH_COUNT - 1:CH_COUNT_3_2]  <= sel_packed_12_keep[CH_COUNT_1_2 - 1:0];
 
-                res_12                                      <= packed_12[12 * CH_COUNT - 1:4 * CH_COUNT];
-                res_12_keep                                 <= packed_12_keep[CH_COUNT_3_2 - 1:CH_COUNT_1_2];
+                res_12                                      <= sel_packed_12[12 * CH_COUNT - 1:4 * CH_COUNT];
+                res_12_keep                                 <= sel_packed_12_keep[CH_COUNT_3_2 - 1:CH_COUNT_1_2];
             end
 
             2: begin
                 m_out_data[8 * CH_COUNT - 1:0]              <= res_12;
-                m_out_data[16 * CH_COUNT - 1:8 * CH_COUNT]  <= packed_12[8 * CH_COUNT - 1:0];
+                m_out_data[16 * CH_COUNT - 1:8 * CH_COUNT]  <= sel_packed_12[8 * CH_COUNT - 1:0];
 
                 m_out_keep[1 * CH_COUNT - 1:0]              <= res_12_keep;
-                m_out_keep[2 * CH_COUNT - 1: 1 * CH_COUNT]  <= s_in_valid ? packed_12_keep[1 * CH_COUNT - 1:0] : 0;
+                m_out_keep[2 * CH_COUNT - 1: 1 * CH_COUNT]  <= s_in_valid ? sel_packed_12_keep[1 * CH_COUNT - 1:0] : 0;
 
                 if (s_in_valid) begin
-                    //res_12[8 * CH_COUNT - 1:4 * CH_COUNT]       <= packed_12[12 * CH_COUNT - 1:8 * CH_COUNT];
-                    //res_12_keep[1 * CH_COUNT - 1:CH_COUNT_1_2]  <= packed_12_keep[CH_COUNT_3_2 - 1:1 * CH_COUNT];
+                    //res_12[8 * CH_COUNT - 1:4 * CH_COUNT]       <= sel_packed_12[12 * CH_COUNT - 1:8 * CH_COUNT];
+                    //res_12_keep[1 * CH_COUNT - 1:CH_COUNT_1_2]  <= sel_packed_12_keep[CH_COUNT_3_2 - 1:1 * CH_COUNT];
 
-                    res_12[4 * CH_COUNT - 1:0]       <= packed_12[12 * CH_COUNT - 1:8 * CH_COUNT];
-                    res_12_keep[CH_COUNT_1_2 - 1:0]  <= packed_12_keep[CH_COUNT_3_2 - 1:1 * CH_COUNT];
+                    res_12[4 * CH_COUNT - 1:0]       <= sel_packed_12[12 * CH_COUNT - 1:8 * CH_COUNT];
+                    res_12_keep[CH_COUNT_1_2 - 1:0]  <= sel_packed_12_keep[CH_COUNT_3_2 - 1:1 * CH_COUNT];
                 end
             end
 
             3: begin
                 //m_out_data[4 * CH_COUNT - 1:0]              <= res_12[8 * CH_COUNT - 1:4 * CH_COUNT];
                 m_out_data[4 * CH_COUNT - 1:0]              <= res_12[4 * CH_COUNT - 1:0];
-                m_out_data[16 * CH_COUNT - 1:4 * CH_COUNT]  <= packed_12;
+                m_out_data[16 * CH_COUNT - 1:4 * CH_COUNT]  <= sel_packed_12;
 
                 //m_out_keep[CH_COUNT_1_2 - 1:0]              <= res_12_keep[1 * CH_COUNT - 1:CH_COUNT_1_2];
                 m_out_keep[CH_COUNT_1_2 - 1:0]              <= res_12_keep[CH_COUNT_1_2 - 1:0];
-                m_out_keep[2 * CH_COUNT - 1:CH_COUNT_1_2]   <= s_in_valid ? packed_12_keep : 0;
+                m_out_keep[2 * CH_COUNT - 1:CH_COUNT_1_2]   <= s_in_valid ? sel_packed_12_keep : 0;
             end
             endcase
 

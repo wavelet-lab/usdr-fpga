@@ -303,12 +303,12 @@ data_compacter #(.DATA_WIDTH(DATA_WIDTH), .CH_COUNT(RAW_CHANS)) data_compacter (
 );
 
 
-data_packer #(.DATA_WIDTH(DATA_WIDTH), .CH_COUNT(RAW_CHANS), .NO_BACKPRESSURE(NO_BACKPRESSURE_12)) data_packer (
+data_packer #(.DATA_WIDTH(DATA_WIDTH), .CH_COUNT(RAW_CHANS), .NO_BACKPRESSURE(NO_BACKPRESSURE_12), .COMPACT_3X16(1)) data_packer2 (
   .rst(burster_rst),
   .clk(clk),
 
   .cfg_mode_12(cfg_packer[0]),
-  .cfg_last_12_extra(cfg_packer[1]),
+  .cfg_mode_3x16(cfg_packer[1]),
 
   `AXIS_RVDLK_PORT_CONN(s_in_,  compact_),
   `AXIS_RVDLK_PORT_CONN(m_out_, iq_bword_)

@@ -10,6 +10,7 @@ module data_unpacker2 #(
     parameter DATA_WIDTH = 16,
     parameter CH_COUNT = 16,
     parameter TAG_WIDTH = 1,
+    parameter COMPACT_3X16 = 0,
     parameter _CH_COUNT_BITS = $clog2(CH_COUNT),
     parameter _CH_BCOUNT_BITS = _CH_COUNT_BITS + 1
 ) (
@@ -17,6 +18,7 @@ module data_unpacker2 #(
   input                                 clk,
 
   input                                 cfg_mode_12,
+  input                                 cfg_mode_3x16, // do 3x16 instead of 4x12 packing
 
   input [CH_COUNT * 16 - 1:0]           s_in_data,
   input [TAG_WIDTH - 1:0]               s_in_tag,
@@ -37,6 +39,8 @@ module data_unpacker2 #(
   output                                    m_out_nxt_last,
   output                                    m_out_nxt_valid
 );
+
+wire                        pack_3x16_into_12 = cfg_mode_3x16 && COMPACT_3X16;
 
 // 16 ch * 16 bit = 256 bits / 32 bytes
 // 24 bytes | 12bit lane
@@ -60,6 +64,15 @@ wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_12_0;
 wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_12_1;
 wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_12_2;
 wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_12_3;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_16x3_0;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_16x3_1;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_16x3_2;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  unpacked_16x3_3;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  sel_unpacked_12_0;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  sel_unpacked_12_1;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  sel_unpacked_12_2;
+wire [DATA_WIDTH * CH_COUNT - 1:0]  sel_unpacked_12_3;
+
 
 wire [12 * CH_COUNT - 1:0]          packed_12_0 = { s_in_data[12 * CH_COUNT - 1:0] };
 wire [12 * CH_COUNT - 1:0]          packed_12_1 = { s_in_data[8 * CH_COUNT - 1:0], res_12[4 * CH_COUNT - 1:0] };
@@ -87,6 +100,8 @@ genvar i;
 generate
 
 for (i = 0; i < CH_COUNT; i=i+1) begin
+    localparam LOW_CH = (i < 3 * (CH_COUNT / 4));
+
     if (DATA_WIDTH <= 12) begin
         assign unpacked_12_0[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] = packed_12_0[12 * (i + 1) - 1:12 * (i + 1) - DATA_WIDTH];
         assign unpacked_12_1[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] = packed_12_1[12 * (i + 1) - 1:12 * (i + 1) - DATA_WIDTH];
@@ -104,6 +119,23 @@ for (i = 0; i < CH_COUNT; i=i+1) begin
     end else begin
         assign unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] = { s_in_data[16 * (i + 1) - 1:16 * (i + 1) - 16], {(DATA_WIDTH-16){1'b0}}};
     end
+
+    if (DATA_WIDTH <= 16) begin
+        assign unpacked_16x3_0[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? packed_12_0[16 * (i + 1) - 1:16 * (i + 1) - DATA_WIDTH] : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+        assign unpacked_16x3_1[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? packed_12_1[16 * (i + 1) - 1:16 * (i + 1) - DATA_WIDTH] : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+        assign unpacked_16x3_2[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? packed_12_2[16 * (i + 1) - 1:16 * (i + 1) - DATA_WIDTH] : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+        assign unpacked_16x3_3[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? packed_12_3[16 * (i + 1) - 1:16 * (i + 1) - DATA_WIDTH] : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+    end else begin
+        assign unpacked_16x3_0[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? { packed_12_0[16 * (i + 1) - 1:16 * (i + 1) - 16], {(DATA_WIDTH-16){1'b0}}} : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+        assign unpacked_16x3_1[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? { packed_12_1[16 * (i + 1) - 1:16 * (i + 1) - 16], {(DATA_WIDTH-16){1'b0}}} : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+        assign unpacked_16x3_2[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? { packed_12_2[16 * (i + 1) - 1:16 * (i + 1) - 16], {(DATA_WIDTH-16){1'b0}}} : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+        assign unpacked_16x3_3[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i] =  LOW_CH ? { packed_12_3[16 * (i + 1) - 1:16 * (i + 1) - 16], {(DATA_WIDTH-16){1'b0}}} : unpacked_16[DATA_WIDTH * (i + 1) - 1:DATA_WIDTH * i];
+    end
+
+    assign sel_unpacked_12_0 = pack_3x16_into_12 ? unpacked_16x3_0 : unpacked_12_0;
+    assign sel_unpacked_12_1 = pack_3x16_into_12 ? unpacked_16x3_1 : unpacked_12_1;
+    assign sel_unpacked_12_2 = pack_3x16_into_12 ? unpacked_16x3_2 : unpacked_12_2;
+    assign sel_unpacked_12_3 = pack_3x16_into_12 ? unpacked_16x3_3 : unpacked_12_3;
 end
 
 endgenerate
@@ -182,7 +214,7 @@ always @(posedge clk) begin
 
             case (state)
             0: begin
-                m_out_data <= unpacked_12_0;
+                m_out_data <= sel_unpacked_12_0;
 
                 if (s_in_valid) begin
                     res_12[4 * CH_COUNT - 1:0]  <=  s_in_data[16 * CH_COUNT - 1:12 * CH_COUNT];
@@ -191,7 +223,7 @@ always @(posedge clk) begin
             end
 
             1: begin
-                m_out_data <= unpacked_12_1;
+                m_out_data <= sel_unpacked_12_1;
 
                 if (s_in_valid) begin
                     res_12        <= s_in_data[16 * CH_COUNT - 1:8 * CH_COUNT];
@@ -200,7 +232,7 @@ always @(posedge clk) begin
             end
 
             2: begin
-                m_out_data <= unpacked_12_2;
+                m_out_data <= sel_unpacked_12_2;
                 if (s_in_valid) begin
                     res_12        <= s_in_data[16 * CH_COUNT - 1:4 * CH_COUNT];
                     res_12_lbcnt  <= (s_in_lbcnt > FULL_12_L2_BCNT) ? s_in_lbcnt - FULL_12_L2_BCNT : 0;
@@ -208,7 +240,7 @@ always @(posedge clk) begin
             end
 
             3: begin
-                m_out_data <= unpacked_12_3;
+                m_out_data <= sel_unpacked_12_3;
                 if (s_in_valid) begin
                     res_12_lbcnt <= 0;
                 end

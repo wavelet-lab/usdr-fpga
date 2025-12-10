@@ -277,6 +277,7 @@ localparam CHAN_STAGES = $clog2(RAW_CHANS);
 reg [RAW_CHANS * CHAN_STAGES - 1:0]   cfg_shuffle;
 reg [RAW_CHANS - 1:0]                 cfg_emute;
 reg                                   cfg_fmt12;
+reg                                   cfg_fmt16x3;
 reg [CHAN_STAGES - 1:0]               cfg_expand;
 
 always @(posedge clk) begin
@@ -287,7 +288,8 @@ always @(posedge clk) begin
         end
 
         FE_CMD_FMT12: begin
-            cfg_fmt12 <= fe_cmd_route_data[0];
+            cfg_fmt12   <= fe_cmd_route_data[0];
+            cfg_fmt16x3 <= fe_cmd_route_data[1];
         end
 
         FE_CMD_MUTE: begin
@@ -353,12 +355,14 @@ axis_opt_pipeline #(
 data_unpacker2 #(
     .DATA_WIDTH(SAMP_WIDTH),
     .CH_COUNT(RAW_CHANS),
-    .TAG_WIDTH(DAC_CMD_WIDTH)
+    .TAG_WIDTH(DAC_CMD_WIDTH),
+    .COMPACT_3X16(1)
 ) data_unpacker2 (
   .rst(rst),
   .clk(clk),
 
   .cfg_mode_12(cfg_fmt12),
+  .cfg_mode_3x16(cfg_fmt16x3),
 
   `AXIS_RVDLT_PORT_CONN(s_in_, rbbuff_),
    .s_in_lbcnt(rbbuff_rlbcnt),
