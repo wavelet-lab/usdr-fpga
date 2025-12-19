@@ -1650,6 +1650,24 @@ if (ULTRA_SCALE) begin
             .dinb(0),
             .doutb(fe_txdma_tdata_rd_ext)
         );
+    end else if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 256 && FEDATA_TX_WIDTH == 256) begin
+        blk_mem_gen_ntx_256_256_2 fifo_mem_tx (
+            .clka(hclk),
+            .ena(    txs_bram_en),
+            .wea(    |txs_bram_wbe),
+            .addra(  txs_bram_addr),
+            .dina(   txs_bram_wdata),
+            .douta(),
+
+            .clkb(dac_clk),
+            .enb(fe_txdma_ten),
+            .web(0),
+            .addrb(fe_txdma_taddr),
+            .dinb(0),
+            .doutb(fe_txdma_tdata_rd_ext)
+        );
+    end else begin
+        unsupported_memory_configuration fifo_mem_tx (.clka(hclk), .rsta(hrst) );
     end
 end else begin
 
