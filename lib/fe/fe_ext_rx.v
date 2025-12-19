@@ -282,7 +282,7 @@ assign s_in_ready = (burster_ready) || burster_rst || !rx_stream_active;
 `DEFINE_AXIS_RVDLK_PORT(compact_, TOTAL_IN_WIDTH, RAW_CHANS);      // compacter output
 `DEFINE_AXIS_RVDLK_PORT(iq_bword_, TOTAL_IN_WIDTH, 2 * RAW_CHANS); // packer output
 
-data_shuffle #(.DATA_WIDTH(DATA_WIDTH), .CH_COUNT(RAW_CHANS), .STAGE_PIPELINE(8'b10101010)) data_shuffle (
+data_shuffle2 #(.DATA_WIDTH(DATA_WIDTH), .CH_COUNT(RAW_CHANS), .STAGE_PIPELINE(8'b10101010)) data_shuffle (
   .rst(burster_rst),
   .clk(clk),
 

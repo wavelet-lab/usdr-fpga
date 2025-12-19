@@ -29,7 +29,8 @@ module fe_ext_tx2 #(
     parameter ID_WIDTH = DAC_CMD_WIDTH + DATA_BITS + 1,
     parameter BUFFER = 1'b1,
     parameter ULTRA_SCALE = 1'b0,
-    parameter EXTRA_DESC_BUFFER = 1'b1
+    parameter EXTRA_DESC_BUFFER = 1'b1,
+    parameter COMPLEX_MODE_ONLY = 1'b1
 )(
     input clk,
     input rst,
@@ -378,7 +379,8 @@ data_unpacker2 #(
 data_expander #(
     .DATA_WIDTH(SAMP_WIDTH),
     .CH_COUNT(RAW_CHANS),
-    .TAG_WIDTH(DAC_CMD_WIDTH)
+    .TAG_WIDTH(DAC_CMD_WIDTH),
+    .SKIP_LOW_BITS(COMPLEX_MODE_ONLY ? 1 : 0)
 ) data_expander (
   .rst(rst),
   .clk(clk),
@@ -396,7 +398,7 @@ data_expander #(
 );
 
 
-data_shuffle #(.DATA_WIDTH(SAMP_WIDTH), .CH_COUNT(RAW_CHANS), .STAGE_PIPELINE(8'b10101010), .TAG_WIDTH(DAC_CMD_WIDTH)) data_shuffle (
+data_shuffle2 #(.DATA_WIDTH(SAMP_WIDTH), .CH_COUNT(RAW_CHANS), .STAGE_PIPELINE(8'b10101010), .TAG_WIDTH(DAC_CMD_WIDTH)) data_shuffle2 (
   .rst(rst),
   .clk(clk),
 
