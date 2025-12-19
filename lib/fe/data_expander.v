@@ -8,7 +8,8 @@ module data_expander #(
     parameter DATA_WIDTH = 16,
     parameter CH_COUNT = 16,
     parameter TAG_WIDTH = 1,
-    parameter _CFG_WIDTH = $clog2(CH_COUNT)
+    parameter _CFG_WIDTH = $clog2(CH_COUNT),
+    parameter SKIP_LOW_BITS = 0
 ) (
   input                                 rst,
   input                                 clk,
@@ -36,7 +37,8 @@ module data_expander #(
 
 localparam C_WIDTH = $clog2(CH_COUNT);
 
-reg [C_WIDTH-1:0] stage;
+reg  [C_WIDTH-1:0]    stage;
+wire [_CFG_WIDTH-1:0] cfg_expand_a = (cfg_expand < SKIP_LOW_BITS) ? SKIP_LOW_BITS : cfg_expand;
 
 // mode
 // 0 -- 1
@@ -59,25 +61,25 @@ reg [C_WIDTH-1:0] stage;
 // 6   00000010    0001    01     1
 // 7   00000001    0001    01     1
 
-wire [C_WIDTH-1:0]   cfg_stages = (1 << (C_WIDTH - cfg_expand)) - 1'b1;
+wire [C_WIDTH-1:0]   cfg_stages = (1 << (C_WIDTH - cfg_expand_a)) - 1'b1;
 
-wire [C_WIDTH - 1:0]  msk_bshft = ((1 << C_WIDTH) - 1'b1) << cfg_expand;
-// wire [C_WIDTH - 1:0]  msk_ishft = 1                       << cfg_expand;
+wire [C_WIDTH - 1:0]  msk_bshft = ((1 << C_WIDTH) - 1'b1) << cfg_expand_a;
+// wire [C_WIDTH - 1:0]  msk_ishft = 1                       << cfg_expand_a;
 // wire [CH_COUNT - 1:0] msk_raw   = ((1 << DATA_WIDTH) - 1'b1) >> msk_bshft;
 
 
-wire [CH_COUNT * DATA_WIDTH - 1:0] shifted_data = s_in_data >> ((DATA_WIDTH << cfg_expand) * stage);
+wire [CH_COUNT * DATA_WIDTH - 1:0] shifted_data = s_in_data >> ((DATA_WIDTH << cfg_expand_a) * stage);
 
 //wire  stage_last = !(s_in_keep >> msk_ishft * (stage + 1))[0];
 
 
-wire  next_transfer_last = s_in_nxt_valid && s_in_nxt_last && (s_in_nxt_lccnt <= ((1 << cfg_expand) - 1'b1));
+wire  next_transfer_last = s_in_nxt_valid && s_in_nxt_last && (s_in_nxt_lccnt <= ((1 << cfg_expand_a) - 1'b1));
 
 reg   stall;
 
 assign s_in_ready = m_out_ready && !stall;
 
-wire [C_WIDTH-1:0] stage_last_num = (s_in_lccnt >> cfg_expand);
+wire [C_WIDTH-1:0] stage_last_num = (s_in_lccnt >> cfg_expand_a);
 
 wire stage_last = (stage == stage_last_num);
 wire stage_last_next = (stage_last_num != 0 && stage == stage_last_num - 1'b1);
