@@ -15,6 +15,7 @@ module al_ram_to_pcie_memwr #(
     parameter KEEP_WIDTH_ = DATA_WIDTH_/32,
     parameter USER_WIDTH_ = ULTRA_SCALE ? 62 : 1,
     parameter [0:0] EARLY_CNF   = 0,
+    parameter S7_TX_BUF_AV = 4,
     parameter TX_BUF_CTRL = 0,  // for 7-Series
     parameter EN64BIT = 0       // for 7-Series
 )(
@@ -58,7 +59,7 @@ module al_ram_to_pcie_memwr #(
     input                                      m_al_rid
 );
 
-wire can_send_fc = (ULTRA_SCALE) ? !TX_BUF_CTRL || !pcieus_tx_busy : !TX_BUF_CTRL || (pcie7s_tx_buf_av > 3);
+wire can_send_fc = (ULTRA_SCALE) ? !TX_BUF_CTRL || !pcieus_tx_busy : !TX_BUF_CTRL || (pcie7s_tx_buf_av > S7_TX_BUF_AV);
 
 wire [DATA_WIDTH_:0] data_to_pcie;
 generate

@@ -76,7 +76,7 @@ module pcie_rq_rc_al_mem #(
 );
 
 localparam DELAYED_FREE_TAG = ULTRA_SCALE_CLI_TAG && ULTRA_SCALE;
-localparam CORE_TAG_BITS    = ULTRA_SCALE_CLI_TAG ? PCIE_TAG_BITS : 8;
+localparam CORE_TAG_BITS    = (ULTRA_SCALE_CLI_TAG || !ULTRA_SCALE) ? PCIE_TAG_BITS : 8;
 
 // For UltraScale use 128/256bit Address-Align mode with External Tag Management
 // For 7-Series use 64bit interface (with externel CPL/MEM stream separation)

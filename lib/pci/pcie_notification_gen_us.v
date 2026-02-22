@@ -20,6 +20,8 @@ module pcie_notification_gen_us #(
 
     input [1:0]                     cfg_pcie_attr,
     input [15:0]                    cfg_pcie_reqid,
+    input [5:0]                     pcie7s_tx_buf_av,
+    input                           pcieus_tx_busy,
 
     // PCIe TLP
     input                           m_axis_tx_tready,
@@ -233,7 +235,9 @@ al_ram_to_pcie_memwr #(
     .REQUEST_LEN_BITS(1),
     .ULTRA_SCALE(ULTRA_SCALE),
     .DATA_BITS(DATA_BITS),
-    .EN64BIT(EN64BIT)
+    .EN64BIT(EN64BIT),
+    .TX_BUF_CTRL(1),
+    .S7_TX_BUF_AV(1)
 ) memwr (
     .clk(clk),
     .rst(rst),
@@ -251,6 +255,8 @@ al_ram_to_pcie_memwr #(
 
     .cfg_pcie_attr(cfg_pcie_attr),
     .cfg_pcie_reqid(cfg_pcie_reqid),
+    .pcie7s_tx_buf_av(pcie7s_tx_buf_av),
+    .pcieus_tx_busy(pcieus_tx_busy),
 
     // AXIs PCIe TX
     .m_axis_tx_tready(m_axis_tx_tready),

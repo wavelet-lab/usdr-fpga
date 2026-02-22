@@ -1091,7 +1091,10 @@ pcie_notification_gen_us #(
 ) pcie_gen (
     .clk(pclk),
     .rst(prst),
-
+    
+    .pcie7s_tx_buf_av(pcie7s_tx_buf_av),
+    .pcieus_tx_busy(us_rq_busy),
+    
     .cfg_pcie_attr(2'b00),
     .cfg_pcie_reqid(cfg_completer_id),
 
@@ -2196,10 +2199,15 @@ if (EGPIO_PRESENT) begin: egpio_present
         .gpo_data(egpio_data_out),
         .gpo_data_oe(egpio_data_oe),
         .gpio_altf0_valid(egpio_altf0_active),
+        .gpio_altf1_valid(egpio_altf1_active),
 
         .alt0_in(egpio_alt0_in),
         .alt0_out(egpio_alt0_out),
-        .alt0_out_oe(egpio_alt0_out_oe)
+        .alt0_out_oe(egpio_alt0_out_oe),
+
+        .alt1_in(egpio_alt1_in),
+        .alt1_out(egpio_alt1_out),
+        .alt1_out_oe(egpio_alt1_out_oe)
     );
 end else begin
     // NO EGPIO
@@ -2211,6 +2219,8 @@ end else begin
     assign egpio_data_out = {EGPIO_WIDTH{1'b0}};
     assign egpio_alt0_in  = {EGPIO_WIDTH{1'b1}};
     assign egpio_altf0_active = {EGPIO_WIDTH{1'b1}};
+    assign egpio_alt1_in  = {EGPIO_WIDTH{1'b1}};
+    assign egpio_altf1_active = {EGPIO_WIDTH{1'b1}};
 end
 endgenerate
 
