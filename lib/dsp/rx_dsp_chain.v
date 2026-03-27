@@ -6,13 +6,14 @@
 // CLEAN
 //
 module rx_dsp_chain #(
-    parameter ADC_WIDTH      = 14,
-    parameter DSP_WIDTH      = 16,
-    parameter CFG_WIDTH      = 32,
-    parameter DSPPHASE_WIDTH = 32,
-    parameter CORDIC         = 0,
-    parameter DC_CORR        = 0,
-    parameter STAGES         = 8
+    parameter       ADC_WIDTH      = 14,
+    parameter       DSP_WIDTH      = 16,
+    parameter       CFG_WIDTH      = 32,
+    parameter       DSPPHASE_WIDTH = 32,
+    parameter       CORDIC         = 0,
+    parameter       DC_CORR        = 0,
+    parameter       STAGES         = 8,
+    parameter [0:0] FIR_ADC_CLOCK  = 0
 )(
     input                        adc_clk,
     input                        adc_rst,
@@ -134,9 +135,10 @@ wire [2 * DSP_WIDTH - 1:0] ncoo_dspclk_data;
 wire                       ncoo_dspclk_valid;
 wire                       ncoo_dspclk_ready;
 
-axis_cc_fifo #(
+axis_opt_cc_fifo #(
     .WIDTH(DSP_WIDTH * 2),
-    .DEEP_BITS(5)
+    .DEEP(16),
+    .CLK_CC(!FIR_ADC_CLOCK)
 ) adc_fifo_i (
     .rx_clk(adc_clk),
     .rx_rst(adc_rst),
