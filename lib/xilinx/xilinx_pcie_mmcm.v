@@ -25,6 +25,7 @@ module xilinx_pci_mmcm #(
     output                      dclk_o,
     output                      userclk_o,
     output                      mmcm_lock_o,
+    output                      mmcm_clk_instopped_o,
 
     output                      clk_50mhz_o,
     output                      clk_200mhz_o,
@@ -170,7 +171,7 @@ MMCME2_ADV #(
     .PSDONE                     (),
 
     //---------- Status ------------------------------------
-    .CLKINSTOPPED               (),
+    .CLKINSTOPPED               (mmcm_clk_instopped_o),
     .CLKFBSTOPPED               ()
 );
 
