@@ -4,7 +4,7 @@
 //
 //
 module xlnx_startup_mmcm #(
-    parameter [0:0] PCIE_INIT_ONLY = 1'b1,
+    parameter [0:0] PCIE_INIT_ONLY = 1'b0,
     parameter [0:0] USB2_INIT_ONLY = 1'b0,
     parameter [0:0] HAS_RESET      = 1'b0,
     parameter       NOLOCK_BITS    = 28,
