@@ -4,9 +4,12 @@
 //
 //
 module xlnx_startup_mmcm #(
-    parameter [0:0] PCIE_INIT_ONLY = 1'b0,
+    parameter [0:0] PCIE_INIT_ONLY = 1'b1,
     parameter [0:0] USB2_INIT_ONLY = 1'b0,
-    parameter [0:0] HAS_RESET      = 1'b0
+    parameter [0:0] HAS_RESET      = 1'b0,
+    parameter       NOLOCK_BITS    = 28,
+    parameter       DEBUG          = 0,
+    parameter       DELTA_RESET    = 1
 )(
     input  cfg_reset,
     input  cfg_mclk,
@@ -16,6 +19,7 @@ module xlnx_startup_mmcm #(
 
     input  usb2_clk_ready,
     input  pipe_mmcm_lock_out,
+    input  pipe_mmcm_clk_instopped,
 
     output brng_usb_logic_reset,
     output brng_phy_nrst,
@@ -31,7 +35,7 @@ module xlnx_startup_mmcm #(
 localparam [0:0]  SMODE_PCIE = 1'b0,
                   SMODE_USB2 = 1'b1;
 
-localparam NOLOCK_BITS = 28;
+wire manual_rst;
 
 reg                  startup_mode = (USB2_INIT_ONLY) ? 1'b1 : 1'b0; // 0 - PCIE; 1 - USB2
 reg                  pipe_mmcm_rst_n_r = 1'b1;
@@ -58,8 +62,37 @@ localparam [4:0]     FUR_USBCLK_EN          = 5'd0,
 
 assign debug_state = fsm_usb2_reinit;
 
+generate 
+if (DEBUG) begin
+    vio_startup vio_startup(
+        .clk(cfg_mclk),
+        .probe_out0(manual_rst),
+        .probe_in0(pcie_no_lock_cntr),
+        .probe_in1(startup_mode),
+        .probe_in2(pipe_mmcm_rst_n_r),
+        .probe_in3(brng_usb_clk_en_r),
+        .probe_in4(brng_usb_nrst_r),
+        .probe_in5(brng_usb_user_reset_r),
+        .probe_in6(brng_usb_logic_reset_r),
+        .probe_in7(pipe_mmcm_clk_instopped)
+   );
+ 
+end else begin
+    assign manual_rst = 1'b0;
+end
+endgenerate
+
+reg cfg_reset_p;
 always @(posedge cfg_mclk) begin
-  if (HAS_RESET && cfg_reset) begin
+    cfg_reset_p <= cfg_reset;
+end
+
+wire custom_rst = (DELTA_RESET) ? (cfg_reset_p != cfg_reset) : cfg_reset;
+wire deam_mmcm = ~pipe_mmcm_lock_out || pipe_mmcm_clk_instopped;
+
+
+always @(posedge cfg_mclk) begin
+  if (HAS_RESET && custom_rst || manual_rst) begin
     startup_mode           <= (USB2_INIT_ONLY) ? 1'b1 : 1'b0; // 0 - PCIE; 1 - USB2
     pipe_mmcm_rst_n_r      <= 1'b1;
     pcie_no_lock_cntr      <= 0;
@@ -70,8 +103,12 @@ always @(posedge cfg_mclk) begin
   end else begin
     pcie_no_lock_cntr <= pcie_no_lock_cntr + 1'b1;
 
-    if (pcie_no_lock_cntr[NOLOCK_BITS-1] == 1'b1 && startup_mode == SMODE_PCIE && ~pipe_mmcm_lock_out && !PCIE_INIT_ONLY && !USB2_INIT_ONLY) begin
+    if (pcie_no_lock_cntr[NOLOCK_BITS-1] == 1'b1 && startup_mode == SMODE_PCIE && deam_mmcm && !PCIE_INIT_ONLY && !USB2_INIT_ONLY) begin
         startup_mode <= SMODE_USB2;
+    end
+    
+    if (startup_mode == SMODE_PCIE && !deam_mmcm ) begin
+        pcie_no_lock_cntr <= 0;
     end
 
     if (pcie_no_lock_cntr[NOLOCK_BITS-1] == 1'b1 && startup_mode == SMODE_USB2 && !PCIE_INIT_ONLY) begin
