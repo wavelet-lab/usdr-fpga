@@ -8,7 +8,8 @@ module app_usdr_pcie #(
     parameter I2C_SPEED = 400_000,
     parameter I2C_CLOCK_STRETCHING = 1'b0,
     parameter USB2_PRESENT = 1'b1,
-    parameter USDR_PID     = 16'h1001
+    parameter USDR_PID     = 16'h1001,
+    parameter USE_EXT_RXFE = 1'b0
 )(
     // Global clock domains for the device
     input          gclk_dsp,
@@ -63,6 +64,7 @@ module app_usdr_pcie #(
     output [11:0]  txd_iob_data,
     output         txd_iob_iqsel,
     output         txd_enable,
+    output         txd_clk_fwd,
 
     // I2C bus
     input  [0:0]   sda_in,
@@ -125,23 +127,30 @@ wire   usb_bus_reset;
 ////////////////////////////////////////////////////////////////////////////////
 // BOARD CONFIGURATION
 
-localparam IGPO_COUNT        = 18;
+localparam IGPO_COUNT        = 20;
 localparam IGPI_COUNT        = 28;
 
 localparam IGPO_LMS_RST      = 0;
 localparam IGPO_RXMIX_EN     = 1;
 localparam IGPO_TXSW         = 2;
 localparam IGPO_RXSW         = 3;
-localparam IGPO_DSP_RX_CFG   = 4;
-localparam IGPO_DSP_TX_CFG   = 5;
-localparam IGPO_USB2_CFG     = 6;
-localparam IGPO_BOOSTER      = 7;
-localparam IGPO_LED          = 8;
-localparam IGPO_DCCORR       = 9;
-localparam IGPO_DSP_RX_CTRL  = 10;
 
-localparam IGPO_CLKMEAS      = 16;
-localparam IGPO_ENABLE_OSC   = 17;
+localparam IGPO_DSPCHAIN_RX_PRG = 4;
+localparam IGPO_DSPCHAIN_RX_RST = 5;
+
+localparam IGPO_USB2_CFG        = 6;
+localparam IGPO_BOOSTER         = 7;
+localparam IGPO_LED             = 8;
+localparam IGPO_DCCORR          = 9;
+localparam IGPO_DSP_RX_CTRL     = 10;
+
+localparam IGPO_CLKMEAS         = 16;
+localparam IGPO_ENABLE_OSC      = 17;
+
+localparam IGPO_DSPCHAIN_TX_PRG = 18;
+localparam IGPO_DSPCHAIN_TX_RST = 19;
+
+
 
 localparam IGPI_USR_ACCESS2  = 0;
 localparam IGPI_CORE_CONF1   = 4;
@@ -170,8 +179,7 @@ synchronizer  #(.INIT(1), .ASYNC_RESET(1)) usb_bus_igp_reg  (
 );
 
 ////////////////////////////////////////////////////////////////////////////////
-wire      dsp_clk = gclk_dsp;
-wire      dsp_prog_rst;
+wire      clk_dsp = gclk_dsp;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -188,26 +196,6 @@ wire   igpdspcfg_rst   = intgpo[IGPO_DSP_RX_CTRL * 8 + 0];
 ////////////////////////////////////////////////////////////////////////////////
 // LMS IF
 
-wire       rxclk_stream_rst;
-wire       dsp_strem_rst;
-wire       igp_stream_rst;
-
-reg [23:0] rxd_demux_data;
-reg        rxd_demux_valid;
-
-always @(posedge rxclk_f_clk) begin
-  if (rxclk_stream_rst) begin
-    rxd_demux_valid <= 1'b0;
-  end else begin
-    if (rxd_iob_iqsel) begin
-      rxd_demux_data[23:12] <= rxd_iob_data;
-      rxd_demux_valid       <= 1'b1;
-    end else begin
-      rxd_demux_data[11:0]  <= rxd_iob_data;
-      rxd_demux_valid       <= 1'b0;
-    end
-  end
-end
 
 wire [31:0] dac_fifo_data;
 wire        dac_fifo_valid;
@@ -232,13 +220,112 @@ always @(posedge txclk_m_clk) begin
 end
 
 ////////////////////////////////////////////////////////////////////////////////
+
+wire                cfg_rx_wvalid;
+wire                cfg_rx_wready;
+wire [31:0]         cfg_rx_wdata;
+wire                cfg_rx_rvalid;
+wire                cfg_rx_rready;
+wire [31:0]         cfg_rx_rdata;
+
+wire                cfg_tx_wvalid;
+wire                cfg_tx_wready;
+wire [31:0]         cfg_tx_wdata;
+wire                cfg_tx_rvalid;
+wire                cfg_tx_rready;
+wire [31:0]         cfg_tx_rdata;
+
+////////////////////////////////////////////////////////////////////////////////
+// LMS IF
 // DSP RX
-wire       cfg_dsprst = intgpo[IGPO_LMS_RST * 8 + 1];
+localparam L_CHANS = 2;
+wire                      fir_adc_clk;
+wire                      fir_adc_rst;
 
-wire [7:0] cfg_dspchain_prg_data  = intgpo[IGPO_DSP_RX_CFG*8 + 7 : IGPO_DSP_RX_CFG*8 + 0];
-wire       cfg_dspchain_prg_valid = igpo_s[IGPO_DSP_RX_CFG];
+wire [32 * L_CHANS - 1:0] dsp_data;
+wire                      dsp_valid;
+wire                      dsp_ready;
 
-synchronizer  #(.INIT(1), .ASYNC_RESET(1)) dsp_reset_reg  (.clk(dsp_clk), .rst(cfg_dsprst), .a_in(igp_rst), .s_out(dsp_prog_rst));
+wire                      igp_rx_stream_rst_opt;
+wire                      rx_streaming;
+
+generate
+if (USE_EXT_RXFE) begin
+    usdr_rx_chain #( .L_RX_CHANS(L_CHANS) ) rx_chain (
+        .i_clk(rxclk_f_clk),
+        .i_data(rxd_iob_data),
+        .i_sel(rxd_iob_iqsel),
+
+        .o_clk(fir_adc_clk),
+        .o_data(dsp_data),
+        .o_valid(dsp_valid),
+        .o_ready(dsp_ready),
+        .o_rst(fir_adc_rst),
+
+        // Configuration DDC
+        .cfg_clk(igp_clk),
+        .cfg_rst(igp_rst),
+
+        .cfg_wvalid(cfg_rx_wvalid),
+        .cfg_wready(cfg_rx_wready),
+        .cfg_wdata(cfg_rx_wdata),
+
+        .cfg_rvalid(cfg_rx_rvalid),
+        .cfg_rready(cfg_rx_rready),
+        .cfg_rdata(cfg_rx_rdata),
+
+        .cfg_rx_rst(igp_rx_stream_rst_opt)
+    );
+end else begin
+assign cfg_rx_wready = 1'b1;
+assign cfg_rx_rvalid = 1'b1;
+
+reg [31:0] iob_d;
+assign cfg_rx_rdata = iob_d;
+
+wire       rxclk_stream_rst;
+wire       dsp_strem_rst;
+wire       igp_stream_rst;
+
+reg [23:0] rxd_demux_data;
+reg        rxd_demux_valid;
+
+always @(posedge rxclk_f_clk) begin
+  if (rxclk_stream_rst) begin
+    rxd_demux_valid <= 1'b0;
+
+    iob_d <= 0;
+  end else begin
+    iob_d <= { iob_d, rxd_iob_iqsel };
+
+    if (rxd_iob_iqsel) begin
+      rxd_demux_data[23:12] <= rxd_iob_data;
+      rxd_demux_valid       <= 1'b1;
+    end else begin
+      rxd_demux_data[11:0]  <= rxd_iob_data;
+      rxd_demux_valid       <= 1'b0;
+    end
+  end
+end
+
+
+// RX cross clock chain  (reset -- source rx_streaming)
+// rxclk_f_clk        =>   fir_adc_clk       =>      igp_clk
+// rxclk_stream_rst   <=   fir_adc_rst       <=      igp_rx_stream_rst
+
+// TODO: 0 - use global DSP clock for FIRBOX, 1 - use ADC clock to sligtly relax timings
+localparam FIR_ADC_CLOCK = 1'b1;
+
+reg          igp_rx_stream_rst;         // Resets DSP to IGP output data FIFO and enables incoming data on IGP clk (master)
+wire         clk_dsp_demux_reset;       // Resets DSP to IGP output data FIFO and enables incoming data on DSP clk (master)
+reg          igp_dsp_cfg_rst;           // Resets FIR CFG load FIFO on IGP clk (master)
+wire         fir_adc_clk_dsp_uload_rst; // Resets FIR CFG load FIFO on ADC clk (slave)
+
+assign         fir_adc_clk = (FIR_ADC_CLOCK) ? rxclk_f_clk      : clk_dsp;
+assign         fir_adc_rst = (FIR_ADC_CLOCK) ? rxclk_stream_rst : clk_dsp_demux_reset;
+
+wire [7:0] cfg_dspchain_prg_data  = intgpo[IGPO_DSPCHAIN_RX_PRG*8 + 7 : IGPO_DSPCHAIN_RX_PRG*8 + 0];
+wire       cfg_dspchain_prg_valid = igpo_s[IGPO_DSPCHAIN_RX_PRG];
 
 wire       dsp_dspchain_prg_valid;
 wire [7:0] dsp_dspchain_prg_data;
@@ -248,49 +335,47 @@ axis_cc_fifo #(
     .DEEP_BITS(3)
 ) igpdspcfg_fifo (
     .rx_clk(igp_clk),
-    .rx_rst(igp_rst),
+    .rx_rst(igp_dsp_cfg_rst),
 
     .s_rx_tdata(cfg_dspchain_prg_data),
     .s_rx_tvalid(cfg_dspchain_prg_valid),
     .s_rx_tready(),
 
-    .tx_clk(dsp_clk),
-    .tx_rst(dsp_rst),
+    .tx_clk(fir_adc_clk),
+    .tx_rst(fir_adc_clk_dsp_uload_rst),
 
     .m_tx_tdata(dsp_dspchain_prg_data),
     .m_tx_tvalid(dsp_dspchain_prg_valid),
     .m_tx_tready(1'b1)
 );
-
-wire [31:0] dsp_data;
-wire        dsp_valid;
-wire        dsp_ready = 1'b1;
+// = 1'b1;
 
 
-// RX cross clock chain  (reset -- source rx_streaming)
-// rxclk_f_clk        =>       dsp_clk       =>        igp_clk
-// rxclk_stream_rst   <=   dsp_strem_rst     <=        { igp_stream_rst | igpdspcfg_rst }
 
-wire       rx_streaming;
-reg        rx_str_rst;
-assign igp_stream_rst = rx_str_rst;
 always @(posedge igp_clk) begin
-    if (igpdspcfg_rst/*igp_rst*/) begin
-        rx_str_rst <= 1'b1;
+    if (igp_rst) begin
+        igp_dsp_cfg_rst <= 1'b1;
     end else begin
-        rx_str_rst <= !rx_streaming;
+        igp_dsp_cfg_rst <= intgpo[8 * IGPO_DSPCHAIN_RX_RST + 0 : 8 * IGPO_DSPCHAIN_RX_RST + 0];
     end
 end
 
-synchronizer  #(.INIT(1), .ASYNC_RESET(0)) rxclk_stream_rst_sync  (.clk(rxclk_f_clk), .rst(0), .a_in(dsp_strem_rst),  .s_out(rxclk_stream_rst));
-synchronizer  #(.INIT(1), .ASYNC_RESET(0)) dsp_strem_rst_sync     (.clk(dsp_clk),     .rst(0), .a_in(igp_stream_rst), .s_out(dsp_strem_rst));
+always @(posedge igp_clk) begin
+    igp_rx_stream_rst <= intgpo[8 * IGPO_DSPCHAIN_RX_RST + 1 : 8 * IGPO_DSPCHAIN_RX_RST + 1] || ~rx_streaming;
+end
+
+synchronizer  #(.INIT(1)) dsp_uload_rst_sync  (.clk(fir_adc_clk),   .rst(1'b0), .a_in(igp_dsp_cfg_rst),   .s_out(fir_adc_clk_dsp_uload_rst));
+synchronizer  #(.INIT(1)) fe_rxclk_f_rst_sync (.clk(rxclk_f_clk),   .rst(1'b0), .a_in(igp_rx_stream_rst), .s_out(rxclk_stream_rst));
+// TO DSP clock if clk_dsp is used
+synchronizer  #(.INIT(1)) dsp_reset_reg       (.clk(clk_dsp),       .rst(1'b0), .a_in(igp_rx_stream_rst), .s_out(clk_dsp_demux_reset));
 
 rx_dsp_chain #(
     .ADC_WIDTH(12),
     .CFG_WIDTH(8),
     .STAGES(8),
     .DC_CORR(1),
-    .CORDIC(0)
+    .CORDIC(0),
+    .FIR_ADC_CLOCK(FIR_ADC_CLOCK)
 ) dsp_chain (
     .adc_clk(rxclk_f_clk),
     .adc_rst(rxclk_stream_rst),
@@ -301,8 +386,8 @@ rx_dsp_chain #(
     .adc_dc_corr_en(intgpo[IGPO_DCCORR * 8 + 0]),
     .adc_dc_corr_vals(intgpi[IGPI_DC_CORR_VAL * 8 + 31 : IGPI_DC_CORR_VAL * 8 + 0]),
 
-    .dsp_clk(dsp_clk),
-    .dsp_rst(dsp_strem_rst),
+    .dsp_clk(fir_adc_clk),
+    .dsp_rst(fir_adc_rst),
     .dsp_data(dsp_data),
     .dsp_valid(dsp_valid),
     .dsp_ready(dsp_ready),
@@ -310,23 +395,28 @@ rx_dsp_chain #(
     .dsp_cfg_data(dsp_dspchain_prg_data[7:0])
 );
 
-wire [31:0] adc_fifo_data;
-wire        adc_fifo_valid;
-wire        adc_fifo_ready;
+assign igp_rx_stream_rst_opt = igp_rx_stream_rst;
+
+end
+endgenerate
+
+wire [L_CHANS * 32 - 1:0] adc_fifo_data;
+wire                      adc_fifo_valid;
+wire                      adc_fifo_ready;
 
 axis_cc_fifo #(
-    .WIDTH(16+16),
+    .WIDTH(16 * 2 * L_CHANS),
     .DEEP_BITS(3)
 ) dsc_to_usrclk_fifo (
-    .rx_clk(dsp_clk),
-    .rx_rst(dsp_strem_rst),
+    .rx_clk(fir_adc_clk),
+    .rx_rst(fir_adc_rst),
 
     .s_rx_tdata( dsp_data ),
     .s_rx_tvalid( dsp_valid ),
-    .s_rx_tready(),
+    .s_rx_tready( dsp_ready ),
 
     .tx_clk(igp_clk),
-    .tx_rst(igp_stream_rst),
+    .tx_rst(igp_rx_stream_rst_opt),
 
     .m_tx_tdata(adc_fifo_data),
     .m_tx_tvalid(adc_fifo_valid),
@@ -459,17 +549,6 @@ usdr_app_generic_us #(
     .cfg_max_payload_size(cfg_max_payload_size),
     .cfg_max_read_req_size(cfg_max_read_req_size),
 
-/*
-    .cfg_interrupt_msienable(cfg_interrupt_msienable),
-    .cfg_interrupt_rdy(cfg_interrupt_rdy),
-    .cfg_interrupt(cfg_interrupt),
-    .cfg_interrupt_assert(cfg_interrupt_assert),
-    .cfg_interrupt_di(cfg_interrupt_di),
-    .legacy_interrupt_disabled(legacy_interrupt_disabled),
-    .cfg_interrupt_mmenable(cfg_interrupt_mmenable),
-    .cfg_pciecap_interrupt_msgnum(cfg_pciecap_interrupt_msgnum),
-    .cfg_interrupt_stat(cfg_interrupt_stat),
-*/
     .cfg_interrupt_msienable(cfg_interrupt_msienable),
     .cfg_interrupt_rdy(cfg_interrupt_rdy),
     .cfg_interrupt(cfg_interrupt),
@@ -477,7 +556,9 @@ usdr_app_generic_us #(
     .cfg_interrupt_mmenable(cfg_interrupt_mmenable),
 
     // streaming
-    .adc_realigned({32'h0, adc_fifo_data}),
+    .adc_clk_ext(clk_dsp),        // Currently we don't use EXTADC clk, but reserve for future use
+    .adc_rst_ext(clk_dsp_fe_rst), // Currently we don't use EXTADC clk, but reserve for future use
+    .adc_realigned(adc_fifo_data),
     .adc_fifo_valid(adc_fifo_valid),
     .rx_ready(adc_fifo_ready),
     .rx_streaming(rx_streaming),
@@ -489,13 +570,13 @@ usdr_app_generic_us #(
     .tx_ready(dac_fifo_ready),
     .tx_streaming(txd_enable),
 
-    .cfg_port_wvalid(),
-    .cfg_port_wready(2'b11),
-    .cfg_port_wdata(),
+    .cfg_port_wvalid(cfg_rx_wvalid),
+    .cfg_port_wready({1'b1, cfg_rx_wready}),
+    .cfg_port_wdata(cfg_rx_wdata),
 
-    .cfg_port_rvalid(2'b11),
-    .cfg_port_rready(),
-    .cfg_port_rdata({ cntr_txclk_m_clk,  cntr_rxclk_f_clk }),
+    .cfg_port_rvalid({1'b1, cfg_rx_rvalid }),
+    .cfg_port_rready( cfg_rx_rready ),
+    .cfg_port_rdata({ cntr_txclk_m_clk,  /*cntr_rxclk_f_clk*/ cfg_rx_rdata }),
 
     .prst(igp_rst),
     .pclk(igp_clk),
@@ -559,13 +640,14 @@ always @(posedge igp_clk) begin
     end
 end
 
+/*
 clock_measurement #(.POSEDGE_ONLY(1'b1), .GEN_WIDTH(4), .CNT_WIDTH(28)) cntr_rxclk_f_meas(
     .meas_clk_i(rxclk_f_clk),
     .ref_pulse_i(cntr_latch),
     .ref_rst_i(igp_rst),
     .meas_data_o(cntr_rxclk_f_clk)
 );
-
+*/
 clock_measurement #(.POSEDGE_ONLY(1'b1), .GEN_WIDTH(4), .CNT_WIDTH(28)) cntr_txclk_m_meas(
     .meas_clk_i(txclk_m_clk),
     .ref_pulse_i(cntr_latch),
@@ -637,13 +719,14 @@ end
 
 wire pps_sig = (clk_tr_sel == 2) ? 0 : (clk_tr_sel == 1) ? ref_clk_trgigger : pps_on_in;
 
+/*
 clock_measurement #(.POSEDGE_ONLY(1'b1), .GEN_WIDTH(4), .CNT_WIDTH(28)) clk_1pps_meas(
     .meas_clk_i(rxclk_f_clk),
     .ref_pulse_i(pps_sig),
     .ref_rst_i(igp_rst),
     .meas_data_o(intgpi[IGPI_CLK1PPS * 8 + 31:IGPI_CLK1PPS * 8 + 0])
 );
-
+*/
 assign uart_txd     = alt_uart_tx ? 1'b0 : sel_uart_txd;
 
 

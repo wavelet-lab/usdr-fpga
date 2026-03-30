@@ -65,6 +65,8 @@ module usdr_top_all #(
   input [1:0]   board_rev
 );
 
+localparam USE_EXT_RXFE = 1'b1;
+
 wire [1:0] board_rev_b;
 
 IBUF board_rev_0_ibuf( .O(board_rev_b[1]),     .I(board_rev[1]));
@@ -193,19 +195,30 @@ for (i = 0; i < 12; i = i + 1) begin: lms_hs
 end
 endgenerate
 
-wire rxclk_f_clk;
-wire rxclk_f_clk_iob;
+wire        rxclk_f_clk_iob;
+wire [11:0] rxd_iob_data;
+wire        rxd_iob_iqsel;
 
-BUFG rxclk_buf(.I(rxclk_f), .O(rxclk_f_clk));
-assign rxclk_f_clk_iob = rxclk_f_clk;
+generate
+if (USE_EXT_RXFE || 1) begin
+    assign rxd_iob_data = lms_rxd;
+    assign rxd_iob_iqsel = lms_rxiqsel;
+    assign rxclk_f_clk_iob = rxclk_f;
+end else begin
+    wire        rxclk_f_clk;
+    BUFG rxclk_buf(.I(rxclk_f), .O(rxclk_f_clk));
+    assign rxclk_f_clk_iob = rxclk_f_clk;
 
-
-(* IOB = "true" *) reg [11:0] rxd_iob_data;
-(* IOB = "true" *) reg        rxd_iob_iqsel;
-always @(posedge rxclk_f_clk_iob) begin
-    rxd_iob_data  <= lms_rxd;
-    rxd_iob_iqsel <= lms_rxiqsel;
+    (* IOB = "true" *) reg [11:0] rxd_iob_data_r;
+    (* IOB = "true" *) reg        rxd_iob_iqsel_r;
+    always @(posedge rxclk_f_clk_iob) begin
+        rxd_iob_data_r  <= lms_rxd;
+        rxd_iob_iqsel_r <= lms_rxiqsel;
+    end
+    assign rxd_iob_data = rxd_iob_data_r;
+    assign rxd_iob_iqsel = rxd_iob_iqsel_r;
 end
+endgenerate
 
 wire txclk_m_clk;
 wire txclk_m_clk_iob;
@@ -701,7 +714,8 @@ assign s_axis_tx_tkeep = {{4{s_axis_tx_tkeep_32[1]}}, {4{s_axis_tx_tkeep_32[0]}}
 app_usdr_pcie #(
     .MASTER_BUS_SPEED(MASTER_BUS_SPEED),
     .I2C_SPEED(I2C_SPEED),
-    .USB2_PRESENT(USB2_PRESENT)
+    .USB2_PRESENT(USB2_PRESENT),
+    .USE_EXT_RXFE(USE_EXT_RXFE)
 ) app (
     .gclk_dsp(dsp_clk),
     .gclk_master(user_clk_pcie),

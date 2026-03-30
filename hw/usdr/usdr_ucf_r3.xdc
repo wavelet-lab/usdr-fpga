@@ -310,6 +310,24 @@ set_false_path -from [get_clocks userclk1_u] -to [get_clocks lms_txclk]
 set_false_path -from [get_clocks lms_txclk] -to [get_clocks userclk1_u]
 
 
+set_false_path -from [get_clocks clk_dsp_e] -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o] -to [get_clocks clk_dsp_e]
+set_false_path -from [get_clocks clk_dsp_u] -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o] -to [get_clocks clk_dsp_u]
+set_false_path -from [get_clocks userclk1] -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o] -to [get_clocks userclk1]
+set_false_path -from [get_clocks userclk1_u] -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o] -to [get_clocks userclk1_u]
+
+set_false_path -from [get_clocks clk_dsp_e] -to [get_clocks fir_adc_clk]
+set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks clk_dsp_e]
+set_false_path -from [get_clocks clk_dsp_u] -to [get_clocks fir_adc_clk]
+set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks clk_dsp_u]
+set_false_path -from [get_clocks userclk1] -to [get_clocks fir_adc_clk]
+set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks userclk1]
+set_false_path -from [get_clocks userclk1_u] -to [get_clocks fir_adc_clk]
+set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks userclk1_u]
+
 # DSP <-> USERCLK
 
 set_false_path -from [get_clocks userclk1] -to [get_clocks clk_dsp_e]
@@ -335,3 +353,6 @@ set_false_path -from [get_clocks usb_clk] -to [get_clocks userclk1_u]
 set_false_path -from [get_clocks usb_clk] -to [get_clocks cfg_mclk]
 set_false_path -from [get_clocks cfg_mclk] -to [get_clocks usb_clk]
 
+
+# We need a free running clock for proper debug hub initialization
+connect_debug_port dbg_hub/clk [get_nets user_clk_pcie]
