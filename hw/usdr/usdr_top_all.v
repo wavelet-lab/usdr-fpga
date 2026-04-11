@@ -66,6 +66,7 @@ module usdr_top_all #(
 );
 
 localparam USE_EXT_RXFE = 1'b1;
+localparam USE_EXT_TXFE = 1'b1;
 
 wire [1:0] board_rev_b;
 
@@ -180,9 +181,9 @@ OBUF flash_buf_cs ( .O(flash_fcs_b), .I(flash_ncs) );
 wire [11:0] lms_rxd;
 wire        lms_rxiqsel;
 
-(* IOB = "true" *) reg [11:0] lms_txd;
-(* IOB = "true" *) reg        lms_txiqsel;
-wire                          lms_txclk;
+wire [11:0] lms_txd;
+wire        lms_txiqsel;
+wire        lms_txclk;
 
 OBUF txiqsel_obuf(  .O(txiqsel),      .I(lms_txiqsel));
 IBUF rxiqsel_ibuf(  .O(lms_rxiqsel),  .I(rxiqsel));
@@ -200,7 +201,7 @@ wire [11:0] rxd_iob_data;
 wire        rxd_iob_iqsel;
 
 generate
-if (USE_EXT_RXFE || 1) begin
+if (USE_EXT_RXFE) begin
     assign rxd_iob_data = lms_rxd;
     assign rxd_iob_iqsel = lms_rxiqsel;
     assign rxclk_f_clk_iob = rxclk_f;
@@ -220,20 +221,39 @@ end else begin
 end
 endgenerate
 
-wire txclk_m_clk;
-wire txclk_m_clk_iob;
 
-BUFG txclk_buf(.I(txclk_ref), .O(txclk_m_clk));
-assign txclk_m_clk_iob = txclk_m_clk;
-
+wire        txclk_m_clk_iob;
+wire        txd_clk_fwd;
 wire [11:0] txd_iob_data;
 wire        txd_iob_iqsel;
-always @(posedge txclk_m_clk_iob) begin
-    lms_txd     <= txd_iob_data;
-    lms_txiqsel <= txd_iob_iqsel;
-end
 
-ODDR txclk_f_oddr( .Q(lms_txclk), .D1(1'b0), .D2(1'b1), .CE(1'b1), .C(txclk_m_clk_iob), .R(1'b0)  );
+generate
+if (USE_EXT_TXFE) begin
+    assign txclk_m_clk_iob = txclk_ref;
+    assign lms_txclk       = txd_clk_fwd;
+    assign lms_txd         = txd_iob_data;
+    assign lms_txiqsel     = txd_iob_iqsel;
+end else begin
+    wire txclk_m_clk;
+
+    (* IOB = "true" *) reg [11:0] lms_txd_r;
+    (* IOB = "true" *) reg        lms_txiqsel_r;
+
+    BUFG txclk_buf(.I(txclk_ref), .O(txclk_m_clk));
+    assign txclk_m_clk_iob = txclk_m_clk;
+
+    always @(posedge txclk_m_clk_iob) begin
+        lms_txd_r     <= txd_iob_data;
+        lms_txiqsel_r <= txd_iob_iqsel;
+    end
+
+    assign lms_txd     = lms_txd_r;
+    assign lms_txiqsel = lms_txiqsel_r;
+    ODDR txclk_f_oddr( .Q(lms_txclk), .D1(1'b0), .D2(1'b1), .CE(1'b1), .C(txclk_m_clk_iob), .R(1'b0)  );
+end
+endgenerate
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // USB2 PHY ULPI
@@ -710,12 +730,20 @@ wire legacy_interrupt_disabled = 1'b0;
 wire [1:0] s_axis_tx_tkeep_32;
 assign s_axis_tx_tkeep = {{4{s_axis_tx_tkeep_32[1]}}, {4{s_axis_tx_tkeep_32[0]}}};
 
+`ifndef FE_TX_IPCORE
+localparam FE_TX_IPCORE_EXT = 1'b0;
+`else
+localparam FE_TX_IPCORE_EXT = 1'b1;
+`endif
 
+wire [5:0] dcp_cfg_id = { 3'h0, FE_TX_IPCORE_EXT, USE_EXT_RXFE, USE_EXT_TXFE };
 app_usdr_pcie #(
     .MASTER_BUS_SPEED(MASTER_BUS_SPEED),
     .I2C_SPEED(I2C_SPEED),
     .USB2_PRESENT(USB2_PRESENT),
-    .USE_EXT_RXFE(USE_EXT_RXFE)
+    .USE_EXT_RXFE(USE_EXT_RXFE),
+    .USE_EXT_TXFE(USE_EXT_TXFE),
+    .TX_EX_CORE(FE_TX_IPCORE_EXT)
 ) app (
     .gclk_dsp(dsp_clk),
     .gclk_master(user_clk_pcie),
@@ -751,7 +779,7 @@ app_usdr_pcie #(
     .cfg_interrupt_stat(cfg_interrupt_stat),
 
     // streaming
-    .hwcfg_port({ 1'b1, cfg_startup_mode_usb, 6'h0, hwcfg_devid, hwcfg_revid, 8'h00 }),
+    .hwcfg_port({ 1'b1, cfg_startup_mode_usb, dcp_cfg_id, hwcfg_devid, hwcfg_revid, 8'h00 }),
 
     .rxclk_f_clk(rxclk_f_clk_iob),
     .rxd_iob_data(rxd_iob_data),
@@ -761,6 +789,7 @@ app_usdr_pcie #(
     .txclk_m_clk(txclk_m_clk_iob),
     .txd_iob_data(txd_iob_data),
     .txd_iob_iqsel(txd_iob_iqsel),
+    .txd_clk_fwd(txd_clk_fwd),
 
     // per
     .sda_in(sda_in),

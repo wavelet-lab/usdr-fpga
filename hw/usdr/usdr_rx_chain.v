@@ -1,4 +1,5 @@
 `timescale 1ns / 1ps
+`default_nettype none
 
 module usdr_rx_chain #(
     parameter IN_WIDTH = 12,
@@ -7,29 +8,29 @@ module usdr_rx_chain #(
     parameter ULTRA_SCALE = 1'b0,
     parameter NEG_POLARITY = 1'b1
 ) (
-    input                                   i_clk,
-    input [IN_WIDTH-1:0]                    i_data,
-    input                                   i_sel,
+    input wire                                   i_clk,
+    input wire [IN_WIDTH-1:0]                    i_data,
+    input wire                                   i_sel,
     
-    output                                  o_clk,
-    output [2 * OUT_WIDTH * L_RX_CHANS-1:0] o_data,
-    output                                  o_valid,
-    input                                   o_ready,
-    output                                  o_rst,
+    output wire                                  o_clk,
+    output wire [2 * OUT_WIDTH * L_RX_CHANS-1:0] o_data,
+    output wire                                  o_valid,
+    input  wire                                  o_ready,
+    output wire                                  o_rst,
     
     // Configuration DDC
-    input                      cfg_clk,
-    input                      cfg_rst,
+    input wire                      cfg_clk,
+    input wire                      cfg_rst,
     
-    input                      cfg_wvalid,
-    output                     cfg_wready,
-    input [31:0]               cfg_wdata,
+    input wire                      cfg_wvalid,
+    output wire                     cfg_wready,
+    input wire [31:0]               cfg_wdata,
     
-    output                     cfg_rvalid,
-    input                      cfg_rready,
-    output [31:0]              cfg_rdata,
+    output wire                    cfg_rvalid,
+    input wire                     cfg_rready,
+    output wire [31:0]             cfg_rdata,
     
-    output                     cfg_rx_rst
+    output wire                    cfg_rx_rst
 );
 
 assign cfg_wready = 1'b1;
@@ -228,6 +229,8 @@ wire [L_RX_CHANS * DSPPHASE_WIDTH-1:0] adc_dsp_cordic_phase;
 wire [L_RX_CHANS * 32:0]               ncoo_adcclk_data;
 wire [L_RX_CHANS - 1:0]                ncoo_adcclk_valid;
 
+localparam CORDIC_WIDTH = 17;
+
 generate
 for (i = 0; i < L_RX_CHANS; i=i+1) begin: ncos
     reg  [DSPPHASE_WIDTH-1:0] nco_value;
@@ -242,22 +245,39 @@ for (i = 0; i < L_RX_CHANS; i=i+1) begin: ncos
 
     wire [DSP_WIDTH:0] ncoi_adcclk_data_i = { adc_dccorr_i[DSP_WIDTH - 1], adc_dccorr_i };
     wire [DSP_WIDTH:0] ncoi_adcclk_data_q = { adc_dccorr_q[DSP_WIDTH - 1], adc_dccorr_q };
+    wire [CORDIC_WIDTH - 1:0] nco_phase = { nco_value[31], nco_value[31], nco_value[31:34 - CORDIC_WIDTH] };
     
-    wire [31:0] ncoi_adcclk_data_native = { ncoi_adcclk_data_q[DSP_WIDTH:DSP_WIDTH - 15], ncoi_adcclk_data_i[DSP_WIDTH:DSP_WIDTH - 15] };
-    wire [31:0] ncoo_adcclk_data_native;
+    if (CORDIC_WIDTH == 16) begin
+        wire [31:0] ncoi_adcclk_data_native = { ncoi_adcclk_data_q[DSP_WIDTH:DSP_WIDTH - 15], ncoi_adcclk_data_i[DSP_WIDTH:DSP_WIDTH - 15] };
+        wire [31:0] ncoo_adcclk_data_native;    
     
-    cordic_0 c0(
-        .aclk(adc_clk),
-        .aresetn(!ddr_reset_adc),
-        .s_axis_phase_tdata( { nco_value[31], nco_value[31], nco_value[31:18]} ),
-        .s_axis_phase_tvalid(adc_dccorr_valid),
-        .s_axis_cartesian_tdata(ncoi_adcclk_data_native),
-        .s_axis_cartesian_tvalid(adc_dccorr_valid),
-        .m_axis_dout_tdata(ncoo_adcclk_data_native),
-        .m_axis_dout_tvalid(ncoo_adcclk_valid[i])
-    );
+        cordic_0 c0(
+            .aclk(adc_clk),
+            .aresetn(!ddr_reset_adc),
+            .s_axis_phase_tdata(nco_phase),
+            .s_axis_phase_tvalid(adc_dccorr_valid),
+            .s_axis_cartesian_tdata(ncoi_adcclk_data_native),
+            .s_axis_cartesian_tvalid(adc_dccorr_valid),
+            .m_axis_dout_tdata(ncoo_adcclk_data_native),
+            .m_axis_dout_tvalid(ncoo_adcclk_valid[i])
+        );
+        assign ncoo_adcclk_data[32 * (i + 1) - 1 : 32 * i] = { ncoo_adcclk_data_native[30:16], 1'b0, ncoo_adcclk_data_native[14:0], 1'b0 };
+    end else begin
+        wire [40:0] ncoi_adcclk_data_native = { ncoi_adcclk_data_q[DSP_WIDTH:DSP_WIDTH - 16], 7'h0, ncoi_adcclk_data_i[DSP_WIDTH:DSP_WIDTH - 16] };
+        wire [40:0] ncoo_adcclk_data_native;    
     
-    assign ncoo_adcclk_data[32 * (i + 1) - 1 : 32 * i] = { ncoo_adcclk_data_native[30:16], 1'b0, ncoo_adcclk_data_native[14:0], 1'b0 };
+        cordic_1 c1(
+            .aclk(adc_clk),
+            .aresetn(!ddr_reset_adc),
+            .s_axis_phase_tdata(nco_phase),
+            .s_axis_phase_tvalid(adc_dccorr_valid),
+            .s_axis_cartesian_tdata(ncoi_adcclk_data_native),
+            .s_axis_cartesian_tvalid(adc_dccorr_valid),
+            .m_axis_dout_tdata(ncoo_adcclk_data_native),
+            .m_axis_dout_tvalid(ncoo_adcclk_valid[i])
+        );
+        assign ncoo_adcclk_data[32 * (i + 1) - 1 : 32 * i] = { ncoo_adcclk_data_native[39:24], ncoo_adcclk_data_native[15:0] };
+    end 
 end
 endgenerate
 // FIR filter
@@ -267,6 +287,8 @@ localparam STAGES    = 8;
 localparam CFG_WIDTH = 8;
 
 // FIR gearbox
+wire [STAGES-1:0]   igp_prg_data;
+wire                igp_prg_strobe;
 wire [STAGES-1:0]   dsp_dspchain_prg_data;
 wire                dsp_dspchain_prg_valid;
 wire                fir_adc_clk_dsp_uload_rst;
@@ -401,12 +423,15 @@ assign cfg_rx_rst = ddr_resete_cfg;
 ila_0 ila_0(
     .clk(cfg_clk),
     .probe0(clk_div_ndiv),
-    .probe1(data_iqsel[0]),
-    .probe2(data_iqsel[1]),
+    .probe1(igp_prg_strobe),
+    .probe2(igp_dsp_cfg_rst),
     .probe3(ddr_reset),
-    .probe4(i_sel),
+    .probe4(ncoo_adcclk_valid),
     .probe5(adc_clk)
 );
 
 
 endmodule
+
+`default_nettype wire
+

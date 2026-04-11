@@ -310,14 +310,23 @@ set_false_path -from [get_clocks userclk1_u] -to [get_clocks lms_txclk]
 set_false_path -from [get_clocks lms_txclk] -to [get_clocks userclk1_u]
 
 
-set_false_path -from [get_clocks clk_dsp_e] -to [get_clocks clk_div_o]
-set_false_path -from [get_clocks clk_div_o] -to [get_clocks clk_dsp_e]
-set_false_path -from [get_clocks clk_dsp_u] -to [get_clocks clk_div_o]
-set_false_path -from [get_clocks clk_div_o] -to [get_clocks clk_dsp_u]
-set_false_path -from [get_clocks userclk1] -to [get_clocks clk_div_o]
-set_false_path -from [get_clocks clk_div_o] -to [get_clocks userclk1]
+set_false_path -from [get_clocks clk_dsp_e]  -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o]  -to [get_clocks clk_dsp_e]
+set_false_path -from [get_clocks clk_dsp_u]  -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o]  -to [get_clocks clk_dsp_u]
+set_false_path -from [get_clocks userclk1]   -to [get_clocks clk_div_o]
+set_false_path -from [get_clocks clk_div_o]  -to [get_clocks userclk1]
 set_false_path -from [get_clocks userclk1_u] -to [get_clocks clk_div_o]
-set_false_path -from [get_clocks clk_div_o] -to [get_clocks userclk1_u]
+set_false_path -from [get_clocks clk_div_o]  -to [get_clocks userclk1_u]
+
+set_false_path -from [get_clocks clk_dsp_e]   -to [get_clocks clk_div_o_1]
+set_false_path -from [get_clocks clk_div_o_1] -to [get_clocks clk_dsp_e]
+set_false_path -from [get_clocks clk_dsp_u]   -to [get_clocks clk_div_o_1]
+set_false_path -from [get_clocks clk_div_o_1] -to [get_clocks clk_dsp_u]
+set_false_path -from [get_clocks userclk1]    -to [get_clocks clk_div_o_1]
+set_false_path -from [get_clocks clk_div_o_1] -to [get_clocks userclk1]
+set_false_path -from [get_clocks userclk1_u]  -to [get_clocks clk_div_o_1]
+set_false_path -from [get_clocks clk_div_o_1] -to [get_clocks userclk1_u]
 
 set_false_path -from [get_clocks clk_dsp_e] -to [get_clocks fir_adc_clk]
 set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks clk_dsp_e]
@@ -327,6 +336,12 @@ set_false_path -from [get_clocks userclk1] -to [get_clocks fir_adc_clk]
 set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks userclk1]
 set_false_path -from [get_clocks userclk1_u] -to [get_clocks fir_adc_clk]
 set_false_path -from [get_clocks fir_adc_clk] -to [get_clocks userclk1_u]
+
+
+set_false_path -from [get_clocks userclk1]    -to [get_clocks clk_div_ndiv]
+set_false_path -from [get_clocks clk_div_ndiv] -to [get_clocks userclk1]
+set_false_path -from [get_clocks userclk1_u]  -to [get_clocks clk_div_ndiv]
+set_false_path -from [get_clocks clk_div_ndiv] -to [get_clocks userclk1_u]
 
 # DSP <-> USERCLK
 

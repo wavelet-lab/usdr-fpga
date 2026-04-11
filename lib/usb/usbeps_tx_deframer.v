@@ -4,8 +4,9 @@ module usbeps_tx_deframer #(
     parameter TX_TIMESTAMP_BITS   = 49,
     parameter TX_RAM_ADDR_WIDTH   = 17,
     parameter TX_SAMPLES_WIDTH    = TX_RAM_ADDR_WIDTH - 1,
-    parameter TX_FE_DESCR_WIDTH   = TX_TIMESTAMP_BITS + TX_SAMPLES_WIDTH + (TX_RAM_ADDR_WIDTH - DATA_BITS),
-    parameter RAM_CHECK_BIT       = 8
+    parameter RAM_CHECK_BIT       = 8,
+    parameter [0:0] TX_EX_CORE    = 1'b0,
+    parameter TX_FE_DESCR_WIDTH   = TX_TIMESTAMP_BITS + TX_SAMPLES_WIDTH + (TX_RAM_ADDR_WIDTH - DATA_BITS) + 2 * TX_EX_CORE
 ) (
     input clk,
     input rst,
@@ -38,26 +39,17 @@ module usbeps_tx_deframer #(
 );
 
 /*
-16 bytes packet header (OLD format)
+16 bytes packet header (OLD / NEW format ABI compatible)
 
 DW0: [31:0]  timestamp[31:0]
 DW1: [31]    discad_timestamp_flag
      [30:16] samples_in_packet       -- up to 32k samples
      [15:0]  timestamp[47:32]
-DW2: 00000000
+DW2: 00000000 or { raw_bytes[16:0] |  timestamp[62:48] }
 DW3: 00000000
 
 DW4-N IQ 16 bit
 
-
-DW2:
- [0]     = 0 -> 16 bit IQ; 1 -> 12 bit IQ
- [1]     = 0 -> SISO;      1 -> MIMO
- [15:2]  = bytes
-
-
-128k addres by 64
-[17:3]
 
 - 63                            0 -
 -----------------------------------
@@ -72,10 +64,12 @@ reg [TX_RAM_ADDR_WIDTH:DATA_BITS]  bytes;
 reg [14:0]                         samples;      // individual samples
 reg [14:0]                         wrpktsamples; //
 
-reg [47:0]                         timestamp;
+reg [16:0]                         raw_bytes;    // Bytes in burst (up to 128Kb)
+
+reg [TX_TIMESTAMP_BITS-1:0]        timestamp;
 reg                                nots;
 
-
+reg [TX_RAM_ADDR_WIDTH:DATA_BITS]  burst_ramadd;
 reg [TX_RAM_ADDR_WIDTH:DATA_BITS]  ramadd;
 assign                             mem_taddr = ramadd[TX_RAM_ADDR_WIDTH-1:DATA_BITS];
 
@@ -95,10 +89,9 @@ localparam FE_BYTES_OFF   = 0;
 localparam FE_SAMPLES_OFF = FE_BYTES_OFF    + (TX_RAM_ADDR_WIDTH - DATA_BITS);
 localparam FE_TS_OFF      = FE_SAMPLES_OFF  + TX_SAMPLES_WIDTH;
 
-assign usbs_burst_data[FE_SAMPLES_OFF - 1:FE_BYTES_OFF]             = bytes;
-assign usbs_burst_data[FE_TS_OFF-1:FE_SAMPLES_OFF]                  = samples;
-assign usbs_burst_data[FE_TS_OFF + TX_TIMESTAMP_BITS - 2:FE_TS_OFF] = timestamp[TX_TIMESTAMP_BITS - 2:0];
-assign usbs_burst_data[FE_TS_OFF + TX_TIMESTAMP_BITS - 1]           = nots;
+
+
+//    { current_burst_ts, cplbuf_bytes[SAMPLES_WIDTH-1:0], current_burst_addr, current_discarded_burst } :
 
 assign s_axis_endpoint_tx_ready =
     (state == ST_IDLE)     ? (!usbs_burst_valid || usbs_burst_ready) :
@@ -127,13 +120,28 @@ assign stat[63]     = fifo_full;
 // s_axis_endpoint_tx_last indicates Endpoint transfers. Actual data ranges can be anything, especially when mutilple
 // blocks combined together
 
-wire samples_strobe = !fetx_mode_format || state == ST_PACKET_H || state == ST_PACKET_QH;
+wire samples_strobe = TX_EX_CORE || !fetx_mode_format || state == ST_PACKET_H || state == ST_PACKET_QH;
+
+generate
+
+if (TX_EX_CORE) begin
+    assign usbs_burst_data[0]                                                                                            = 1'b0;
+    assign usbs_burst_data[TX_RAM_ADDR_WIDTH - DATA_BITS + 1:1]                                                          = burst_ramadd;
+    assign usbs_burst_data[TX_SAMPLES_WIDTH - 1 + TX_RAM_ADDR_WIDTH - DATA_BITS + 2 : TX_RAM_ADDR_WIDTH - DATA_BITS + 2] = raw_bytes;
+    assign usbs_burst_data[TX_FE_DESCR_WIDTH - 1 :TX_SAMPLES_WIDTH + TX_RAM_ADDR_WIDTH - DATA_BITS + 2]                  = timestamp;
+end else begin
+    assign usbs_burst_data[FE_SAMPLES_OFF - 1:FE_BYTES_OFF]             = bytes;
+    assign usbs_burst_data[FE_TS_OFF-1:FE_SAMPLES_OFF]                  = samples;
+    assign usbs_burst_data[FE_TS_OFF + TX_TIMESTAMP_BITS - 2:FE_TS_OFF] = timestamp[TX_TIMESTAMP_BITS - 2:0];
+    assign usbs_burst_data[FE_TS_OFF + TX_TIMESTAMP_BITS - 1]           = nots;
+end
 
 always @(posedge clk) begin
     if (rst) begin
         state                   <= ST_IDLE;
         mem_tvalid              <= 1'b0;
         ramadd                  <= 0;
+        //burst_ramadd            <= 0;
         usbs_burst_valid        <= 1'b0;
         s_axis_endpoint_tx_busy <= 1'b0; // Clear FIFO in reset
         dropped                 <= 0;
@@ -179,13 +187,19 @@ always @(posedge clk) begin
             end
 
             ST_HEADER_DW2: begin
-                //samples[16:15]   <= s_axis_endpoint_tx_data[1:0];
-                state            <= state + 1'b1;
+                if (TX_EX_CORE) begin
+                    raw_bytes                         <= s_axis_endpoint_tx_data[31:15];
+                    timestamp[TX_TIMESTAMP_BITS-1:48] <= { nots, s_axis_endpoint_tx_data[14:0] };
+                end
+                
+                state                             <= state + 1'b1;
             end
 
             ST_HEADER_DW3: begin
                 state            <= state + 1'b1;
 
+                burst_ramadd     <= ramadd;
+                
                 if ((packet_late /* || sig_realign*/) && !nots) begin
                     dropped          <= dropped + 1'b1;
                     drop_packet      <= 1'b1;
@@ -222,7 +236,7 @@ always @(posedge clk) begin
                     mem_tvalid       <= !drop_packet;
                 end
 
-                if (samples == wrpktsamples && samples_strobe) begin
+                if (TX_EX_CORE ? (raw_bytes[16:2] == wrpktsamples) : (samples == wrpktsamples && samples_strobe)) begin
                     mem_tvalid       <= !drop_packet;
 
                     state            <= ST_IDLE;
@@ -236,7 +250,7 @@ always @(posedge clk) begin
 
     end
 end
-
+endgenerate
 
 endmodule
 

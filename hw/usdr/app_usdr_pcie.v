@@ -9,7 +9,9 @@ module app_usdr_pcie #(
     parameter I2C_CLOCK_STRETCHING = 1'b0,
     parameter USB2_PRESENT = 1'b1,
     parameter USDR_PID     = 16'h1001,
-    parameter USE_EXT_RXFE = 1'b0
+    parameter USE_EXT_RXFE = 1'b0,
+    parameter USE_EXT_TXFE = 1'b0,
+    parameter [0:0] TX_EX_CORE = 1'b0
 )(
     // Global clock domains for the device
     input          gclk_dsp,
@@ -121,6 +123,8 @@ module app_usdr_pcie #(
     output       usb2_phy_doe
 );
 
+localparam L_CHANS = 2;
+
 wire   usb_bus_reset;
 
 `include "../axi_helpers.vh"
@@ -195,50 +199,91 @@ wire   igpdspcfg_rst   = intgpo[IGPO_DSP_RX_CTRL * 8 + 0];
 
 ////////////////////////////////////////////////////////////////////////////////
 // LMS IF
-
-
-wire [31:0] dac_fifo_data;
-wire        dac_fifo_valid;
-wire        dac_fifo_ready;
-
-reg [11:0]  txd_iob_data_s;
-reg         txd_iob_iqsel_s;
-assign txd_iob_data   = txd_iob_data_s;
-assign txd_iob_iqsel  = txd_iob_iqsel_s;
-assign dac_fifo_ready = txd_iob_iqsel_s;
-
-always @(posedge txclk_m_clk) begin
-    if (~txd_enable) begin
-        txd_iob_data_s  <= 0;
-        txd_iob_iqsel_s <= 0;
-    end else begin
-        if (dac_fifo_valid) begin
-            txd_iob_iqsel_s <= ~txd_iob_iqsel_s;
-            txd_iob_data_s  <= (txd_iob_iqsel_s) ? dac_fifo_data[31:20] : dac_fifo_data[15:4];
-        end
-    end
-end
-
-////////////////////////////////////////////////////////////////////////////////
-
-wire                cfg_rx_wvalid;
-wire                cfg_rx_wready;
-wire [31:0]         cfg_rx_wdata;
-wire                cfg_rx_rvalid;
-wire                cfg_rx_rready;
-wire [31:0]         cfg_rx_rdata;
+wire [31:0]         cfg_wdata;
 
 wire                cfg_tx_wvalid;
 wire                cfg_tx_wready;
-wire [31:0]         cfg_tx_wdata;
+wire [31:0]         cfg_tx_wdata = cfg_wdata;
 wire                cfg_tx_rvalid;
 wire                cfg_tx_rready;
 wire [31:0]         cfg_tx_rdata;
 
+wire [32 * L_CHANS - 1:0] dac_fifo_data;
+wire                      dac_fifo_valid;
+wire                      dac_fifo_ready;
+wire                      dac_fifo_clk;
+wire                      dac_rst_ext;
+generate
+if (USE_EXT_TXFE) begin
+
+    usdr_tx_chain #( .L_TX_CHANS(L_CHANS) ) tx_chain (
+        .o_clk(txclk_m_clk),
+        .o_data(txd_iob_data),
+        .o_sel(txd_iob_iqsel),
+        .o_clk_fwd(txd_clk_fwd),
+
+        .i_clk(dac_fifo_clk),
+        .i_data(dac_fifo_data),
+        .i_valid(dac_fifo_valid),
+        .i_ready(dac_fifo_ready),
+        .i_rst(dac_rst_ext),
+        .i_enable(txd_enable),
+
+        // Configuration DDC
+        .cfg_clk(igp_clk),
+        .cfg_rst(igp_rst),
+
+        .cfg_wvalid(cfg_tx_wvalid),
+        .cfg_wready(cfg_tx_wready),
+        .cfg_wdata(cfg_tx_wdata),
+
+        .cfg_rvalid(cfg_tx_rvalid),
+        .cfg_rready(cfg_tx_rready),
+        .cfg_rdata(cfg_tx_rdata),
+
+        .cfg_tx_rst()
+    );
+
+end else begin
+    assign cfg_tx_wready = 1'b1;
+    assign cfg_tx_rvalid = 1'b1;
+
+    reg [11:0]  txd_iob_data_s;
+    reg         txd_iob_iqsel_s;
+    assign txd_iob_data   = txd_iob_data_s;
+    assign txd_iob_iqsel  = txd_iob_iqsel_s;
+    assign dac_fifo_ready = txd_iob_iqsel_s;
+    assign dac_fifo_clk = txclk_m_clk;
+
+    always @(posedge txclk_m_clk) begin
+        if (~txd_enable) begin
+            txd_iob_data_s  <= 0;
+            txd_iob_iqsel_s <= 0;
+        end else begin
+            if (dac_fifo_valid) begin
+                txd_iob_iqsel_s <= ~txd_iob_iqsel_s;
+                txd_iob_data_s  <= (txd_iob_iqsel_s) ? dac_fifo_data[31:20] : dac_fifo_data[15:4];
+            end
+        end
+    end
+end
+endgenerate
+
+////////////////////////////////////////////////////////////////////////////////
+
+
+wire                cfg_rx_wvalid;
+wire                cfg_rx_wready;
+wire [31:0]         cfg_rx_wdata = cfg_wdata;
+wire                cfg_rx_rvalid;
+wire                cfg_rx_rready;
+wire [31:0]         cfg_rx_rdata;
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // LMS IF
 // DSP RX
-localparam L_CHANS = 2;
+
 wire                      fir_adc_clk;
 wire                      fir_adc_rst;
 
@@ -508,6 +553,7 @@ usdr_app_generic_us #(
     .USB2_PRESENT(USB2_PRESENT),
     .USDR_PID(USDR_PID),
     .USE_EXT_DAC_CLK(1'b1),
+    .TX_EX_CORE(TX_EX_CORE),
     .TX_INITIAL_TS_COMP(0) // No compensation yet TBD
 ) gen_app (
     .hrst(igp_rst),
@@ -564,19 +610,22 @@ usdr_app_generic_us #(
     .rx_streaming(rx_streaming),
     .adc_ch_enable(),
 
-    .dac_clk_ext(txclk_m_clk), //todo remove me!!!!
+    .dac_clk_ext(dac_fifo_clk), //todo remove me!!!!
+    .dac_rst_ext(dac_rst_ext),
     .dac_realigned(dac_fifo_data),
     .dac_fifo_valid(dac_fifo_valid),
     .tx_ready(dac_fifo_ready),
     .tx_streaming(txd_enable),
 
-    .cfg_port_wvalid(cfg_rx_wvalid),
-    .cfg_port_wready({1'b1, cfg_rx_wready}),
-    .cfg_port_wdata(cfg_rx_wdata),
+    .cfg_port_wvalid({ cfg_tx_wvalid, cfg_rx_wvalid}),
+    .cfg_port_wready({ cfg_tx_wready, cfg_rx_wready}),
+    //.cfg_port_wdata ({ cfg_tx_wdata,  cfg_rx_wdata}),
+    .cfg_port_wdata (cfg_wdata),
 
-    .cfg_port_rvalid({1'b1, cfg_rx_rvalid }),
-    .cfg_port_rready( cfg_rx_rready ),
-    .cfg_port_rdata({ cntr_txclk_m_clk,  /*cntr_rxclk_f_clk*/ cfg_rx_rdata }),
+    .cfg_port_rvalid({ cfg_tx_rvalid, cfg_rx_rvalid }),
+    .cfg_port_rready({ cfg_tx_rready, cfg_rx_rready }),
+    .cfg_port_rdata ({ cfg_tx_rdata,  cfg_rx_rdata }),
+   // .cfg_port_rdata({ cntr_txclk_m_clk,  /*cntr_rxclk_f_clk*/ cfg_rx_rdata }),
 
     .prst(igp_rst),
     .pclk(igp_clk),
@@ -640,20 +689,25 @@ always @(posedge igp_clk) begin
     end
 end
 
-/*
+generate
+if (!USE_EXT_RXFE) begin
 clock_measurement #(.POSEDGE_ONLY(1'b1), .GEN_WIDTH(4), .CNT_WIDTH(28)) cntr_rxclk_f_meas(
     .meas_clk_i(rxclk_f_clk),
     .ref_pulse_i(cntr_latch),
     .ref_rst_i(igp_rst),
     .meas_data_o(cntr_rxclk_f_clk)
 );
-*/
+end
+if (!USE_EXT_TXFE) begin
 clock_measurement #(.POSEDGE_ONLY(1'b1), .GEN_WIDTH(4), .CNT_WIDTH(28)) cntr_txclk_m_meas(
     .meas_clk_i(txclk_m_clk),
     .ref_pulse_i(cntr_latch),
     .ref_rst_i(igp_rst),
     .meas_data_o(cntr_txclk_m_clk)
 );
+end
+endgenerate
+
 
 // SDA -              GPLED0 / GPIO0
 // SCL -              GPLED1 / GPIO1

@@ -1585,6 +1585,11 @@ end else begin
 ////////////////////////////////////////////////////////////////////////////////
 //    TX STREAMING
 
+`ifndef FE_TX_IPCORE
+localparam FE_TX_IPCORE_EXT = 1'b0;
+`else
+localparam FE_TX_IPCORE_EXT = 1'b1;
+`endif
 
 wire                              txdma_bram_en;
 wire [RAM_TX_ADDR_W-1:DATA_BITS]  txdma_bram_addr;
@@ -1602,8 +1607,25 @@ wire                                   fe_txdma_ten;
 wire [RAM_TX_ADDR_W-1:FEDATA_TX_BITS]  fe_txdma_taddr;
 wire [FEDATA_TX_WIDTH-1:0]             fe_txdma_tdata_rd_ext;
 
-if (ULTRA_SCALE) begin
-    if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 128 && FEDATA_TX_WIDTH == 64) begin
+if (ULTRA_SCALE || FE_TX_IPCORE_EXT) begin
+    if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 64 && FEDATA_TX_WIDTH == 64) begin
+        // 128kB of RAM
+        blk_mem_gen_ntx_64_64_2 fifo_mem_tx (
+            .clka(hclk),
+            .ena(    txs_bram_en),
+            .wea(    |txs_bram_wbe),
+            .addra(  txs_bram_addr),
+            .dina(   txs_bram_wdata),
+            .douta(),
+
+            .clkb(dac_clk),
+            .enb(fe_txdma_ten),
+            .web(0),
+            .addrb(fe_txdma_taddr),
+            .dinb(0),
+            .doutb(fe_txdma_tdata_rd_ext)
+        );
+    end else if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 128 && FEDATA_TX_WIDTH == 64) begin
         // 128kB of RAM
         blk_mem_gen_ntx_128_64_2 fifo_mem_tx (
             .clka(hclk),
@@ -2236,7 +2258,8 @@ if (USB2_PRESENT) begin: usb2_present
         .NO_TX(NO_TX),
         .TX_TIMESTAMP_BITS(TX_TIMESTAMP_BITS),
         .TX_RAM_ADDR_WIDTH(TX_RAM_ADDR_WIDTH),
-        .TX_SAMPLES_WIDTH(TX_SAMPLES_WIDTH)
+        .TX_SAMPLES_WIDTH(TX_SAMPLES_WIDTH),
+        .TX_EX_CORE(TX_EX_CORE)
     ) usb2_core(
         // ULPI interface
         .phy_rst(phy_rst),

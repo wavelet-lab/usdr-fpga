@@ -7,9 +7,10 @@ module usb2_core #(
     parameter        _DATA_BYTES       = 1 << DATA_BITS,
     parameter        TX_TIMESTAMP_BITS = 48,
     parameter        TX_SAMPLES_WIDTH  = TX_RAM_ADDR_WIDTH - 1,
-    parameter        TX_FE_DESCR_WIDTH = TX_TIMESTAMP_BITS + TX_SAMPLES_WIDTH + (TX_RAM_ADDR_WIDTH - DATA_BITS),
     parameter        NO_TX             = 0,
-    parameter        RAM_CHECK_BIT     = 8
+    parameter        RAM_CHECK_BIT     = 8,
+    parameter [0:0]  TX_EX_CORE        = 1'b0,
+    parameter        TX_FE_DESCR_WIDTH = TX_TIMESTAMP_BITS + TX_SAMPLES_WIDTH + (TX_RAM_ADDR_WIDTH - DATA_BITS) + 2 * TX_EX_CORE
 )(
     // ULPI interface
     input            phy_rst,
@@ -194,7 +195,8 @@ usbeps_tx_deframer #(
     .TX_RAM_ADDR_WIDTH(TX_RAM_ADDR_WIDTH),
     .TX_SAMPLES_WIDTH(TX_SAMPLES_WIDTH),
     .DATA_BITS(DATA_BITS),
-    .RAM_CHECK_BIT(RAM_CHECK_BIT)
+    .RAM_CHECK_BIT(RAM_CHECK_BIT),
+    .TX_EX_CORE(TX_EX_CORE)
 ) usbeps_tx_deframer (
     .clk(clk),
     .rst(tx_nactive),
