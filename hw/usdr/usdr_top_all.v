@@ -85,7 +85,7 @@ IBUF board_rev_1_ibuf( .O(board_rev_b[0]),     .I(board_rev[0]));
 
 generate
 if (DEVICE_ID == 0) begin
-    $error("Set DEVICE_ID to non-zero");
+    initial $fatal(1, "Set DEVICE_ID to non-zero");
     assign pci_exp_rxp = 0;
 end
 endgenerate

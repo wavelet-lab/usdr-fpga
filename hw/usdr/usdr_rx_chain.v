@@ -6,30 +6,31 @@ module usdr_rx_chain #(
     parameter OUT_WIDTH = 16,
     parameter L_RX_CHANS = 1,
     parameter ULTRA_SCALE = 1'b0,
-    parameter NEG_POLARITY = 1'b1
+    parameter NEG_POLARITY = 1'b1,
+    parameter HAS_DC_ESTIMATOR = 1'b1
 ) (
     input wire                                   i_clk,
     input wire [IN_WIDTH-1:0]                    i_data,
     input wire                                   i_sel,
-    
+
     output wire                                  o_clk,
     output wire [2 * OUT_WIDTH * L_RX_CHANS-1:0] o_data,
     output wire                                  o_valid,
     input  wire                                  o_ready,
     output wire                                  o_rst,
-    
+
     // Configuration DDC
     input wire                      cfg_clk,
     input wire                      cfg_rst,
-    
+
     input wire                      cfg_wvalid,
     output wire                     cfg_wready,
     input wire [31:0]               cfg_wdata,
-    
+
     output wire                    cfg_rvalid,
     input wire                     cfg_rready,
     output wire [31:0]             cfg_rdata,
-    
+
     output wire                    cfg_rx_rst
 );
 
@@ -168,7 +169,7 @@ ISERDESE2 #(
 //        _____       _____
 // IQSEL /     \_____/     \_
 //
-// ISE2  .Q2_0  .Q1_0 .Q2_1 .Q1_1 ...          
+// ISE2  .Q2_0  .Q1_0 .Q2_1 .Q1_1 ...
 //         I0     Q0    I1    Q1
 // bit      0      1     0     1
 //                                                                                     Combined: { N , N-1 }
@@ -189,11 +190,11 @@ reg                  deser_aligned_valid;
 wire [4*IN_WIDTH-1:0] data_deser_w = { data_deser, data_deser_p };
 
 localparam [1:0] IQ_SEL_ALIGNED = NEG_POLARITY ? 2'b10 : 2'b01;
- 
+
 always @(posedge adc_clk) begin
     deser_aligned_valid  <= !ddr_reset_adc;
     data_deser_p         <= data_deser;
-    
+
     deser_aligned_data   <= data_deser_w >> ((data_iqsel == IQ_SEL_ALIGNED) ? (2*IN_WIDTH) : (IN_WIDTH));
 end
 
@@ -214,7 +215,7 @@ dsp_dc_corr #(.WIDTH(OUT_WIDTH)) dc_corr (
     .rst(ddr_reset_adc),
     .in_data({ deser_data_ext_q, deser_data_ext_i }),
     .in_valid(deser_aligned_valid),
-    
+
     .out_data({ adc_dccorr_q, adc_dccorr_i }),
     .out_valid(adc_dccorr_valid),
     .cfg_dc_corr_en(adc_dc_corr_en),
@@ -234,23 +235,23 @@ localparam CORDIC_WIDTH = 17;
 generate
 for (i = 0; i < L_RX_CHANS; i=i+1) begin: ncos
     reg  [DSPPHASE_WIDTH-1:0] nco_value;
-    
+
     always @(posedge adc_clk) begin
         if (ddr_reset_adc) begin
             nco_value <= 0;
         end else begin
             nco_value <= nco_value + adc_dsp_cordic_phase[DSPPHASE_WIDTH * (i + 1) - 1:DSPPHASE_WIDTH * i];
         end
-    end    
+    end
 
     wire [DSP_WIDTH:0] ncoi_adcclk_data_i = { adc_dccorr_i[DSP_WIDTH - 1], adc_dccorr_i };
     wire [DSP_WIDTH:0] ncoi_adcclk_data_q = { adc_dccorr_q[DSP_WIDTH - 1], adc_dccorr_q };
     wire [CORDIC_WIDTH - 1:0] nco_phase = { nco_value[31], nco_value[31], nco_value[31:34 - CORDIC_WIDTH] };
-    
+
     if (CORDIC_WIDTH == 16) begin
         wire [31:0] ncoi_adcclk_data_native = { ncoi_adcclk_data_q[DSP_WIDTH:DSP_WIDTH - 15], ncoi_adcclk_data_i[DSP_WIDTH:DSP_WIDTH - 15] };
-        wire [31:0] ncoo_adcclk_data_native;    
-    
+        wire [31:0] ncoo_adcclk_data_native;
+
         cordic_0 c0(
             .aclk(adc_clk),
             .aresetn(!ddr_reset_adc),
@@ -264,8 +265,8 @@ for (i = 0; i < L_RX_CHANS; i=i+1) begin: ncos
         assign ncoo_adcclk_data[32 * (i + 1) - 1 : 32 * i] = { ncoo_adcclk_data_native[30:16], 1'b0, ncoo_adcclk_data_native[14:0], 1'b0 };
     end else begin
         wire [40:0] ncoi_adcclk_data_native = { ncoi_adcclk_data_q[DSP_WIDTH:DSP_WIDTH - 16], 7'h0, ncoi_adcclk_data_i[DSP_WIDTH:DSP_WIDTH - 16] };
-        wire [40:0] ncoo_adcclk_data_native;    
-    
+        wire [40:0] ncoo_adcclk_data_native;
+
         cordic_1 c1(
             .aclk(adc_clk),
             .aresetn(!ddr_reset_adc),
@@ -277,7 +278,7 @@ for (i = 0; i < L_RX_CHANS; i=i+1) begin: ncos
             .m_axis_dout_tvalid(ncoo_adcclk_valid[i])
         );
         assign ncoo_adcclk_data[32 * (i + 1) - 1 : 32 * i] = { ncoo_adcclk_data_native[39:24], ncoo_adcclk_data_native[15:0] };
-    end 
+    end
 end
 endgenerate
 // FIR filter
@@ -313,6 +314,14 @@ axis_cc_fifo #(
     .m_tx_tready(1'b1)
 );
 
+localparam ADC_STATIC_ERROR = 2;
+wire [2 * OUT_WIDTH * L_RX_CHANS-1:0] o_data_nc;
+generate
+for (i = 0; i < L_RX_CHANS * 2; i = i + 1) begin
+    assign o_data[OUT_WIDTH * (i + 1) - 1 -:OUT_WIDTH] = o_data_nc[OUT_WIDTH * (i + 1) - 1 -:OUT_WIDTH] + ADC_STATIC_ERROR;
+end
+endgenerate
+
 reconf_dsp_fir #(
     .IN_WIDTH(DSP_WIDTH),
     .CHANS(2 * L_RX_CHANS),
@@ -329,7 +338,7 @@ reconf_dsp_fir #(
     .in_ready(),
 
     .out_valid(o_valid),
-    .out_data(o_data),
+    .out_data(o_data_nc),
     .out_ready(o_ready),
 
     .cfg_valid(dsp_dspchain_prg_valid),
@@ -359,6 +368,7 @@ localparam [7:0]
     CFG_REG_IQIMB_1 = 3,
     CFG_REG_IQIMB_2 = 4,
     CFG_REG_IQIMB_3 = 5,
+    CFG_REG_DC_EST = 6, // DC estimator
     CFG_REG_NCO0_L = 8,
     CFG_REG_NCO0_H = 9,
     CFG_REG_NCO1_L = 10,
@@ -369,8 +379,8 @@ localparam [7:0]
 
 wire       rd_reg_update = cfg_wdata[31];
 wire [6:0] wr_addr = cfg_wdata[30:24];
-reg [6:0]  rd_addr;
-
+reg [6:0]  rb_bank_addr;
+reg [7:0]  rb_sel_addr;
 
 // DC_EN
 reg adc_dc_corr_en_cfg;
@@ -383,6 +393,13 @@ synchronizer  #(.INIT(1)) ddr_reset_adc_sync (.clk(adc_clk),     .rst(1'b0), .a_
 
 synchronizer  #(.INIT(1)) ddr_reset_ext_sync (.clk(adc_clk),     .rst(1'b0), .a_in(ddr_resete_cfg), .s_out(o_rst));
 
+wire      dc_est_rst_lclk;
+reg       ctrl_dc_est_rst;
+reg [7:0] ctrl_dc_est_acc;
+synchronizer  #(.INIT(1)) dc_estim_start     (.clk(adc_clk), .rst(ddr_reset), .a_in(ctrl_dc_est_rst), .s_out(dc_est_rst_lclk));
+
+wire [7:0]  cfg_baddr = cfg_wdata[23:16];
+
 always @(posedge cfg_clk) begin
     if (cfg_rst) begin
         ddr_reset_cfg   <= 1'b1;
@@ -390,7 +407,7 @@ always @(posedge cfg_clk) begin
     end else begin
         if (cfg_wvalid) begin
             if (rd_reg_update) begin
-                rd_addr <= wr_addr;
+                { rb_bank_addr, rb_sel_addr } <= cfg_wdata[30:16];
             end else begin
                 case (wr_addr)
                     CFG_REG_RESET: begin
@@ -403,6 +420,16 @@ always @(posedge cfg_clk) begin
                     CFG_REG_NCO0_H: reg_nco0_h <= cfg_wdata;
                     CFG_REG_NCO1_L: reg_nco1_l <= cfg_wdata;
                     CFG_REG_NCO1_H: reg_nco1_h <= cfg_wdata;
+
+                    CFG_REG_DC_EST: begin
+                        if (cfg_baddr == 0) begin
+                            ctrl_dc_est_rst <= cfg_wdata;
+                        end
+                        if (cfg_baddr == 1) begin
+                            ctrl_dc_est_acc <= cfg_wdata;
+                        end
+                    end
+
                 endcase
             end
         end
@@ -413,7 +440,19 @@ assign igp_prg_data   = cfg_wdata[7:0];
 assign igp_prg_strobe = cfg_wvalid && !rd_reg_update && (wr_addr == CFG_REG_DSP_LD);
 
 
-assign cfg_rdata = adc_dc_corr_vals;
+localparam [2:0]
+    ADDR_BANK_CLKMEAS = 2,
+    ADDR_BANK_RAW_DC  = 4,
+    ADDR_BANK_DC_EST  = 6;
+
+wire rb_dc_estim  = (rb_bank_addr == ADDR_BANK_DC_EST);
+
+wire [31:0] rb_dc_estim_meas;
+wire [2:0]  rb_dc_estim_w = rb_sel_addr[2:0];
+
+assign cfg_rdata =
+    rb_dc_estim  ? rb_dc_estim_meas :
+    adc_dc_corr_vals;
 
 assign o_clk = adc_clk;
 
@@ -430,6 +469,29 @@ ila_0 ila_0(
     .probe5(adc_clk)
 );
 
+
+if (HAS_DC_ESTIMATOR) begin
+    wire [7:0]         count;
+    wire [32 * 4 -1:0] dc_meas;
+
+    assign rb_dc_estim_meas =
+        rb_dc_estim_w == 4 ? dc_meas[31:0] :
+        rb_dc_estim_w == 5 ? dc_meas[63:32] :
+        rb_dc_estim_w == 6 ? dc_meas[95:64] :
+        rb_dc_estim_w == 7 ? dc_meas[127:96] : count;
+
+    dc_estimator #(.CHANS(2 * L_RX_CHANS), .IN_WIDTH(OUT_WIDTH), .OUT_WIDTH(32), .CNT_WIDTH(8)) dc_est (
+        .clk(o_clk),
+        .rst(dc_est_rst_lclk),
+
+        .in_data(o_data),
+        .in_valid(o_valid),
+        .in_acc(ctrl_dc_est_acc),
+
+        .out_data(dc_meas),
+        .out_cnt(count)
+    );
+end
 
 endmodule
 

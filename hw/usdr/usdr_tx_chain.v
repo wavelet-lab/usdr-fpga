@@ -122,19 +122,23 @@ reconf_dsp_fir #(
     .cfg_data(dsp_dspchain_prg_data)
 );
 
+localparam CORDIC_WIDTH = 17;
 
 wire [L_TX_CHANS * DSPPHASE_WIDTH-1:0] dac_dsp_cordic_phase;
 wire [L_TX_CHANS - 1:0]                ncoo_dacclk_valid;
-wire [32-1:0]                          ncoo_dacclk_data[0:L_TX_CHANS-1];
 
-localparam CORDIC_WIDTH = 16;
+// Use extra bit since rotattion can increase amplitutde up to sqrt(2)
+wire [DSP_WIDTH:0]                ncoo_dacclk_data_i[0:L_TX_CHANS-1];
+wire [DSP_WIDTH:0]                ncoo_dacclk_data_q[0:L_TX_CHANS-1];
+
+wire nco_reset_dac;
 
 generate
 for (i = 0; i < L_TX_CHANS; i=i+1) begin: ncos
     reg  [DSPPHASE_WIDTH-1:0] nco_value;
 
     always @(posedge dac_clk) begin
-        if (ddr_reset_dac) begin
+        if (nco_reset_dac) begin
             nco_value <= 0;
         end else begin
             if (phy_rdy) begin
@@ -166,8 +170,10 @@ for (i = 0; i < L_TX_CHANS; i=i+1) begin: ncos
             .m_axis_dout_tvalid(ncoo_dacclk_valid[i])
         );
     
-        assign clamp_q = ( ncoo_dacclk_data_native[31:30] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[31:30] == 2'b01 ? 16'h7fff : { ncoo_dacclk_data_native[30:16], 1'b0 } );
-        assign clamp_i = ( ncoo_dacclk_data_native[15:14] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[15:14] == 2'b01 ? 16'h7fff : { ncoo_dacclk_data_native[14:0], 1'b0 } );
+        // assign clamp_q = ( ncoo_dacclk_data_native[31:30] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[31:30] == 2'b01 ? 16'h7fff : { ncoo_dacclk_data_native[30:16], 1'b0 } );
+        // assign clamp_i = ( ncoo_dacclk_data_native[15:14] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[15:14] == 2'b01 ? 16'h7fff : { ncoo_dacclk_data_native[14:0], 1'b0 } );
+        assign ncoo_dacclk_data_i[i] = { ncoo_dacclk_data_native[15:0], 1'b0 };
+        assign ncoo_dacclk_data_q[i] = { ncoo_dacclk_data_native[31:16], 1'b0 }; 
     end else begin
         wire [40:0] ncoi_dacclk_data_native = { ncoi_dacclk_data_q[DSP_WIDTH:DSP_WIDTH - 16], 7'h0, ncoi_dacclk_data_i[DSP_WIDTH:DSP_WIDTH - 16] };
         wire [40:0] ncoo_dacclk_data_native;
@@ -183,27 +189,31 @@ for (i = 0; i < L_TX_CHANS; i=i+1) begin: ncos
             .m_axis_dout_tvalid(ncoo_dacclk_valid[i])
         );
     
-        assign clamp_q = ( ncoo_dacclk_data_native[40:39] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[40:39] == 2'b01 ? 16'h7fff : ncoo_dacclk_data_native[39:24] );
-        assign clamp_i = ( ncoo_dacclk_data_native[16:15] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[16:15] == 2'b01 ? 16'h7fff : ncoo_dacclk_data_native[15:0] );    
+        //assign clamp_q = ( ncoo_dacclk_data_native[40:39] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[40:39] == 2'b01 ? 16'h7fff : ncoo_dacclk_data_native[39:24] );
+        //assign clamp_i = ( ncoo_dacclk_data_native[16:15] == 2'b10 ? 16'h8000 : ncoo_dacclk_data_native[16:15] == 2'b01 ? 16'h7fff : ncoo_dacclk_data_native[15:0] );  
+        
+        assign ncoo_dacclk_data_i[i] = ncoo_dacclk_data_native[16:0];
+        assign ncoo_dacclk_data_q[i] = ncoo_dacclk_data_native[40:24]; 
     end
 
-    assign ncoo_dacclk_data[i] = { clamp_q, clamp_i };
+    //assign ncoo_dacclk_data[i] = { clamp_q, clamp_i };
 end
 endgenerate
 
 
 // Accumulate
 localparam EX_BITS = $clog2(L_TX_CHANS);
-reg [EX_BITS + DSP_WIDTH - 1:0] acc_i;
-reg [EX_BITS + DSP_WIDTH - 1:0] acc_q;
+localparam ACC_WIDTH = EX_BITS + DSP_WIDTH + 1; //18 bits for 2-NCO 16bit data
+reg [ACC_WIDTH-1:0] acc_i;
+reg [ACC_WIDTH-1:0] acc_q;
 
 integer j;
 always @* begin
     acc_i = 0;
     acc_q = 0;
     for (j = 0; j < L_TX_CHANS; j = j + 1) begin
-        acc_i = acc_i + ncoo_dacclk_data[j][    IN_WIDTH - 1 : 0];
-        acc_q = acc_q + ncoo_dacclk_data[j][2 * IN_WIDTH - 1 : IN_WIDTH];
+        acc_i = $signed(acc_i) + $signed(ncoo_dacclk_data_i[j]);
+        acc_q = $signed(acc_q) + $signed(ncoo_dacclk_data_q[j]);
     end
 end
 
@@ -219,26 +229,60 @@ assign i_ready = 1'b1;
 wire clk_div_o;
 wire clk_io;
 
-// DC-corrector
-reg [11:0]             corr_i;
-reg [11:0]             corr_q;
-reg [DSP_WIDTH - 1:0]  corrected_i;
-reg [DSP_WIDTH - 1:0]  corrected_q;
+// IQ-corrector
+localparam IQ_CFG_WIDTH = 24;
+localparam TX_OUT_WIDTH = 16;
+
+reg [IQ_CFG_WIDTH-1:0] cfg_amp_i;
+reg [IQ_CFG_WIDTH-1:0] cfg_amp_q;
+reg [IQ_CFG_WIDTH-1:0] cfg_tan_i;
+reg [IQ_CFG_WIDTH-1:0] cfg_tan_q;
+
+wire [TX_OUT_WIDTH-1:0] acc_corr_q;
+wire [TX_OUT_WIDTH-1:0] acc_corr_i;
+iq_corr #(.WIDTH(ACC_WIDTH), .CFG_WIDTH(IQ_CFG_WIDTH), .OUT_WIDTH(TX_OUT_WIDTH)) iq_corr (
+    .clk(dac_clk),
+    .rst(ddr_reset_dac),
+
+    .cfg_amp({cfg_amp_q, cfg_amp_i}),
+    .cfg_tan({cfg_tan_q, cfg_tan_i}),
+
+    .in_data({acc_q, acc_i}),
+    .in_valid(1'b1),
+
+    .out_data({acc_corr_q, acc_corr_i}),
+    .out_valid()
+);
+
+// DC-corrector and clamp
+reg [11:0]                corr_i;
+reg [11:0]                corr_q;
+reg [TX_OUT_WIDTH - 1:0]  corrected_i;
+reg [TX_OUT_WIDTH - 1:0]  corrected_q;
+reg [TX_OUT_WIDTH - 2:0]  corrected_clp_i;
+reg [TX_OUT_WIDTH - 2:0]  corrected_clp_q;
+
+localparam CLAMP_MAX = { 1'b0, {(TX_OUT_WIDTH - 2){1'b1}}};
+localparam CLAMP_MIN = { 1'b1, {(TX_OUT_WIDTH - 2){1'b0}}};
 
 always @(posedge dac_clk) begin
     if (!i_enable) begin
-        corrected_i <= 0;
-        corrected_q <= 0;
+        corrected_clp_i <= 0;
+        corrected_clp_q <= 0;
     end else begin
         if (phy_rdy) begin
-            corrected_i <= $signed(acc_i) + $signed(corr_i);
-            corrected_q <= $signed(acc_q) + $signed(corr_q);
+            corrected_i <= $signed(acc_corr_i) + $signed(corr_i);
+            corrected_q <= $signed(acc_corr_q) + $signed(corr_q);
+            
+            corrected_clp_i <= ( corrected_i[TX_OUT_WIDTH-1-:2] == 2'b10 ? CLAMP_MAX : corrected_i[TX_OUT_WIDTH-1-:2] == 2'b01 ? CLAMP_MIN : corrected_i[TX_OUT_WIDTH - 2:0] );
+            corrected_clp_q <= ( corrected_q[TX_OUT_WIDTH-1-:2] == 2'b10 ? CLAMP_MAX : corrected_q[TX_OUT_WIDTH-1-:2] == 2'b01 ? CLAMP_MIN : corrected_q[TX_OUT_WIDTH - 2:0] );  
+      
         end
     end
 end
 
-wire [OUT_WIDTH-1:0] serder_i = corrected_i[DSP_WIDTH - 1:DSP_WIDTH - OUT_WIDTH];
-wire [OUT_WIDTH-1:0] serder_q = corrected_q[DSP_WIDTH - 1:DSP_WIDTH - OUT_WIDTH];
+wire [OUT_WIDTH-1:0] serder_i = corrected_clp_i[TX_OUT_WIDTH - 2 -:OUT_WIDTH];
+wire [OUT_WIDTH-1:0] serder_q = corrected_clp_q[TX_OUT_WIDTH - 2 -:OUT_WIDTH];
 
 // SERDES interface
 assign phy_rdy = 1'b1;
@@ -266,8 +310,13 @@ wire ddr_reset_cfg_s;
     ila_1 ila_1(
         .clk(dac_clk),
         .probe0(i_enable),
-        .probe1(serder_i),
-        .probe2(serder_q),
+        //.probe1(serder_i),
+        //.probe2(serder_q),
+        .probe1(acc_corr_i),
+        .probe2(acc_corr_q),
+//        .probe1(acc_i),
+//        .probe2(acc_q),
+        
         .probe3(ddr_reset_dac),
         .probe4(ddr_reset_cfg_s)
     );
@@ -467,10 +516,15 @@ reg [6:0]  rd_addr;
 // DC_EN
 reg ddr_reset_cfg;
 reg ddr_resete_cfg;
+reg ddr_reset_nco_cfg;
+
 synchronizer  #(.INIT(1)) ddr_reset_sync     (.clk(clk_div_o),   .rst(1'b0), .a_in(ddr_reset_cfg),  .s_out(ddr_reset));
 synchronizer  #(.INIT(1)) ddr_reset_adc_sync (.clk(dac_clk),     .rst(1'b0), .a_in(ddr_reset_cfg),  .s_out(ddr_reset_dac));
 
 synchronizer  #(.INIT(1)) ddr_reset_ext_sync (.clk(dac_clk),     .rst(1'b0), .a_in(ddr_resete_cfg), .s_out(i_rst));
+
+
+synchronizer  #(.INIT(1)) ddr_reset_nco_sync (.clk(dac_clk),     .rst(ddr_reset_cfg), .a_in(ddr_reset_nco_cfg),  .s_out(nco_reset_dac));
 
 always @(posedge cfg_clk) begin
     if (cfg_rst) begin
@@ -487,11 +541,18 @@ always @(posedge cfg_clk) begin
                         igp_dsp_cfg_rst <= cfg_wdata[1];
                         ddr_resete_cfg  <= cfg_wdata[3];
                         clk_phase       <= cfg_wdata[7];
+                        ddr_reset_nco_cfg <= cfg_wdata[8]; // NCO phase reset
                     end
                     CFG_REG_DCCTRL: begin
                         corr_i  <= cfg_wdata[11:0];
                         corr_q  <= cfg_wdata[23:12];
                     end
+                    
+                    CFG_REG_IQIMB_0: cfg_amp_i <= cfg_wdata;
+                    CFG_REG_IQIMB_1: cfg_amp_q <= cfg_wdata;
+                    CFG_REG_IQIMB_2: cfg_tan_i <= cfg_wdata;
+                    CFG_REG_IQIMB_3: cfg_tan_q <= cfg_wdata;
+
                     CFG_REG_NCO0_L: reg_nco0_l <= cfg_wdata;
                     CFG_REG_NCO0_H: reg_nco0_h <= cfg_wdata;
                     CFG_REG_NCO1_L: reg_nco1_l <= cfg_wdata;
