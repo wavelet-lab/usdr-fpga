@@ -6,7 +6,8 @@ module usdr_tx_chain #(
     parameter IN_WIDTH = 16,
     parameter L_TX_CHANS = 1,
     parameter ULTRA_SCALE = 1'b0,
-    parameter NEG_POLARITY = 1'b1
+    parameter NEG_POLARITY = 1'b1,
+    parameter DC_GENERATOR = 1'b1
 ) (
     input wire                                  o_clk,
     output wire [OUT_WIDTH-1:0]                 o_data,
@@ -96,6 +97,14 @@ wire [2 * IN_WIDTH * L_TX_CHANS-1:0]   duc_data;
 wire                                   duc_valid;
 wire                                   duc_ready = phy_rdy;
 
+reg [IN_WIDTH - 1:0] dc_const_ai;
+reg [IN_WIDTH - 1:0] dc_const_aq;
+reg [IN_WIDTH - 1:0] dc_const_bi;
+reg [IN_WIDTH - 1:0] dc_const_bq;
+reg                  dc_const_enable;
+
+wire [2 * IN_WIDTH * L_TX_CHANS-1:0]   mux_data = dc_const_enable ? { dc_const_bq, dc_const_bi, dc_const_aq, dc_const_ai } : i_data;
+    
 reconf_dsp_fir #(
     .IN_WIDTH(DSP_WIDTH),
     .CHANS(2 * L_TX_CHANS),
@@ -111,7 +120,7 @@ reconf_dsp_fir #(
     .clk(dac_clk),
 
     .in_valid(i_valid),
-    .in_data(i_data),
+    .in_data(DC_GENERATOR ? mux_data : i_data),
     .in_ready(i_ready),
 
     .out_valid(duc_valid),
@@ -130,6 +139,7 @@ wire [L_TX_CHANS - 1:0]                ncoo_dacclk_valid;
 // Use extra bit since rotattion can increase amplitutde up to sqrt(2)
 wire [DSP_WIDTH:0]                ncoo_dacclk_data_i[0:L_TX_CHANS-1];
 wire [DSP_WIDTH:0]                ncoo_dacclk_data_q[0:L_TX_CHANS-1];
+wire [2 * (DSP_WIDTH + 1) - 1:0]  ncoo_dacclk_data[0:L_TX_CHANS-1];
 
 wire nco_reset_dac;
 
@@ -196,7 +206,7 @@ for (i = 0; i < L_TX_CHANS; i=i+1) begin: ncos
         assign ncoo_dacclk_data_q[i] = ncoo_dacclk_data_native[40:24]; 
     end
 
-    //assign ncoo_dacclk_data[i] = { clamp_q, clamp_i };
+    assign ncoo_dacclk_data[i] = { ncoo_dacclk_data_q[i], ncoo_dacclk_data_i[i] };
 end
 endgenerate
 
@@ -281,8 +291,13 @@ always @(posedge dac_clk) begin
     end
 end
 
+`ifdef SYM
+wire [OUT_WIDTH-1:0] serder_i = { 1'b0, corrected_clp_i[TX_OUT_WIDTH - 2:4] };
+wire [OUT_WIDTH-1:0] serder_q = { 1'b0, corrected_clp_q[TX_OUT_WIDTH - 2:4] };
+`else
 wire [OUT_WIDTH-1:0] serder_i = corrected_clp_i[TX_OUT_WIDTH - 2 -:OUT_WIDTH];
 wire [OUT_WIDTH-1:0] serder_q = corrected_clp_q[TX_OUT_WIDTH - 2 -:OUT_WIDTH];
+`endif
 
 // SERDES interface
 assign phy_rdy = 1'b1;
@@ -324,7 +339,12 @@ wire ddr_reset_cfg_s;
     BUFG in_bufg(.I(o_clk), .O(full_clk));
     
     synchronizer  #(.INIT(1)) ddr_reset_full_clk(.clk(full_clk), .rst(1'b0), .a_in(ddr_reset_dac),  .s_out(full_rst));
-    
+
+`ifdef SYM
+    assign serder_i_f = serder_i;
+    assign serder_q_f = serder_q;
+    assign serder_valid = i_enable && !full_rst;
+`else
     axis_cc_fifo #(
         .WIDTH(OUT_WIDTH * 2),
         .DEEP_BITS(3)
@@ -343,6 +363,7 @@ wire ddr_reset_cfg_s;
         .m_tx_tvalid(serder_valid),
         .m_tx_tready(serder_rdy)
     );
+`endif
 
     reg [11:0]  txd_iob_data_s;
     reg         txd_iob_iqsel_s;
@@ -500,6 +521,7 @@ localparam [7:0]
     CFG_REG_IQIMB_1 = 3,
     CFG_REG_IQIMB_2 = 4,
     CFG_REG_IQIMB_3 = 5,
+    CFG_REG_DC_GEN = 7, // DC test signal generator
     CFG_REG_NCO0_L = 8,
     CFG_REG_NCO0_H = 9,
     CFG_REG_NCO1_L = 10,
@@ -526,6 +548,8 @@ synchronizer  #(.INIT(1)) ddr_reset_ext_sync (.clk(dac_clk),     .rst(1'b0), .a_
 
 synchronizer  #(.INIT(1)) ddr_reset_nco_sync (.clk(dac_clk),     .rst(ddr_reset_cfg), .a_in(ddr_reset_nco_cfg),  .s_out(nco_reset_dac));
 
+wire [7:0]  cfg_baddr = cfg_wdata[23:16];
+
 always @(posedge cfg_clk) begin
     if (cfg_rst) begin
         ddr_reset_cfg   <= 1'b1;
@@ -546,6 +570,16 @@ always @(posedge cfg_clk) begin
                     CFG_REG_DCCTRL: begin
                         corr_i  <= cfg_wdata[11:0];
                         corr_q  <= cfg_wdata[23:12];
+                    end
+                    
+                    CFG_REG_DC_GEN: begin
+                        case (cfg_baddr[2:0])
+                        0: dc_const_enable <= cfg_wdata;
+                        4: dc_const_ai     <= cfg_wdata;
+                        5: dc_const_aq     <= cfg_wdata;
+                        6: dc_const_bi     <= cfg_wdata;
+                        7: dc_const_bq     <= cfg_wdata;
+                        endcase
                     end
                     
                     CFG_REG_IQIMB_0: cfg_amp_i <= cfg_wdata;

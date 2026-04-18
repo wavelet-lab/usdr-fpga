@@ -1584,13 +1584,6 @@ end else begin
 
 ////////////////////////////////////////////////////////////////////////////////
 //    TX STREAMING
-
-`ifndef FE_TX_IPCORE
-localparam FE_TX_IPCORE_EXT = 1'b0;
-`else
-localparam FE_TX_IPCORE_EXT = 1'b1;
-`endif
-
 wire                              txdma_bram_en;
 wire [RAM_TX_ADDR_W-1:DATA_BITS]  txdma_bram_addr;
 wire [C_DATA_WIDTH-1:0]           txdma_bram_wdata;
@@ -1607,7 +1600,7 @@ wire                                   fe_txdma_ten;
 wire [RAM_TX_ADDR_W-1:FEDATA_TX_BITS]  fe_txdma_taddr;
 wire [FEDATA_TX_WIDTH-1:0]             fe_txdma_tdata_rd_ext;
 
-if (ULTRA_SCALE || FE_TX_IPCORE_EXT) begin
+if (ULTRA_SCALE || TX_EX_CORE) begin
     if (RAM_TX_ADDR_W == 17 && C_DATA_WIDTH == 64 && FEDATA_TX_WIDTH == 64) begin
         // 128kB of RAM
         blk_mem_gen_ntx_64_64_2 fifo_mem_tx (

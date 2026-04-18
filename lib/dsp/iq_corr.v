@@ -1,5 +1,5 @@
 module iq_corr #(
-    parameter WIDTH     = 12,
+    parameter WIDTH     = 16,
     parameter CFG_WIDTH = 16,
     parameter OUT_WIDTH = 16
 ) (
@@ -59,8 +59,8 @@ always @(posedge clk) begin
     end
 
     if (data_s0_valid) begin
-        data_s1_corr_i <= $signed(data_s0_direct[WIDTH - 1:0])         * $signed(cfg_amp[CFG_WIDTH - 1:0])             + data_s0_mtan_q;
-        data_s1_corr_q <= $signed(data_s0_direct[2 * WIDTH - 1:WIDTH]) * $signed(cfg_amp[2 * CFG_WIDTH - 1:CFG_WIDTH]) + data_s0_mtan_i;
+        data_s1_corr_i <= $signed(data_s0_direct[WIDTH - 1:0])         * $signed(cfg_amp[CFG_WIDTH - 1:0])             + $signed(data_s0_mtan_q);
+        data_s1_corr_q <= $signed(data_s0_direct[2 * WIDTH - 1:WIDTH]) * $signed(cfg_amp[2 * CFG_WIDTH - 1:CFG_WIDTH]) + $signed(data_s0_mtan_i);
     end
 end
 
