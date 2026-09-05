@@ -8,7 +8,7 @@ module xlnx_startup_mmcm #(
     parameter [0:0] USB2_INIT_ONLY = 1'b0,
     parameter [0:0] HAS_RESET      = 1'b0,
     parameter       NOLOCK_BITS    = 28,
-    parameter       DEBUG          = 0,
+    parameter [0:0] DEBUG          = 1,
     parameter       DELTA_RESET    = 1
 )(
     input  cfg_reset,
@@ -48,19 +48,27 @@ reg                   brng_usb_logic_reset_r = 1'b1;
 
 localparam           IUSB2_DLY = 8;
 wire [4:0]           fsm_usb2_reinit = pcie_no_lock_cntr[IUSB2_DLY + 4:IUSB2_DLY];
+
+localparam           DELAY_USBCLKEN         = 20;
 localparam [4:0]     FUR_USBCLK_EN          = 5'd0,
-                     FUR_PHYUSB_RESETB      = 5'd1+3,
-                     FUR_MCMS_RESET_ACT     = 5'd2+3,
-                     FUR_MCMS_RESET_RELEASE = 5'd3+3,
-                     FUR_MCMS_WAIT_LOCK_0   = 5'd4+3,
-                     FUR_MCMS_WAIT_LOCK_1   = 5'd5+3,
-                     FUR_MCMS_WAIT_LOCK_2   = 5'd6+3,
-                     FUR_MCMS_WAIT_LOCK_3   = 5'd7+3,
-                     FUR_PHY_LOGIC_RST_H    = 5'd8+3,
-                     FUR_PHY_LOGIC_RST_L    = 5'd9+3,
-                     FUR_END                = 5'd10+3;
+                     FUR_PHYUSB_RESETB      = 5'd1+DELAY_USBCLKEN,
+                     FUR_MCMS_RESET_ACT     = 5'd2+DELAY_USBCLKEN,
+                     FUR_MCMS_RESET_RELEASE = 5'd3+DELAY_USBCLKEN,
+                     FUR_MCMS_WAIT_LOCK_0   = 5'd4+DELAY_USBCLKEN,
+                     FUR_MCMS_WAIT_LOCK_1   = 5'd5+DELAY_USBCLKEN,
+                     FUR_MCMS_WAIT_LOCK_2   = 5'd6+DELAY_USBCLKEN,
+                     FUR_MCMS_WAIT_LOCK_3   = 5'd7+DELAY_USBCLKEN,
+                     FUR_PHY_LOGIC_RST_H    = 5'd8+DELAY_USBCLKEN,
+                     FUR_PHY_LOGIC_RST_L    = 5'd9+DELAY_USBCLKEN,
+                     FUR_END                = 5'd10+DELAY_USBCLKEN;
 
 assign debug_state = fsm_usb2_reinit;
+
+reg cfg_reset_p;
+wire custom_rst = (DELTA_RESET) ? (cfg_reset_p != cfg_reset) : cfg_reset;
+wire deam_mmcm = ~pipe_mmcm_lock_out || pipe_mmcm_clk_instopped;
+
+
 
 generate 
 if (DEBUG) begin
@@ -74,7 +82,11 @@ if (DEBUG) begin
         .probe_in4(brng_usb_nrst_r),
         .probe_in5(brng_usb_user_reset_r),
         .probe_in6(brng_usb_logic_reset_r),
-        .probe_in7(pipe_mmcm_clk_instopped)
+        .probe_in7(pipe_mmcm_clk_instopped),
+        .probe_in8(custom_rst),
+        .probe_in9(deam_mmcm),
+        .probe_in10(cfg_reset_p),
+        .probe_in11(cfg_reset)
    );
  
 end else begin
@@ -82,13 +94,10 @@ end else begin
 end
 endgenerate
 
-reg cfg_reset_p;
+
 always @(posedge cfg_mclk) begin
     cfg_reset_p <= cfg_reset;
 end
-
-wire custom_rst = (DELTA_RESET) ? (cfg_reset_p != cfg_reset) : cfg_reset;
-wire deam_mmcm = ~pipe_mmcm_lock_out || pipe_mmcm_clk_instopped;
 
 
 always @(posedge cfg_mclk) begin
