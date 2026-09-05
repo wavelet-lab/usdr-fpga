@@ -243,7 +243,7 @@ for (i = 0; i < WIDTH; i=i+1) begin : srl32
     ) fifo32_1 (
         .CLK(clk),
         .CE(we),
-        .D(data_i_cyc[i]),
+        .D(srlout_0[i] /*data_i_cyc[i]*/),
         .A(addr_i[4:0]),
         .Q(srldata_1[i]),
         .Q31(srlout_1[i])
@@ -259,7 +259,7 @@ for (i = 0; i < WIDTH; i=i+1) begin : srl32
     ) fifo32_2 (
         .CLK(clk),
         .CE(we),
-        .D(data_i_cyc[i]),
+        .D(srlout_1[i] /*data_i_cyc[i]*/),
         .A(addr_i[4:0]),
         .Q(srldata_2[i]),
         .Q31(srlout_2[i])
@@ -275,7 +275,7 @@ for (i = 0; i < WIDTH; i=i+1) begin : srl32
     ) fifo32_3 (
         .CLK(clk),
         .CE(we),
-        .D(data_i_cyc[i]),
+        .D(srlout_2[i] /*data_i_cyc[i]*/),
         .A(addr_i[4:0]),
         .Q(srldata_3[i]),
         .Q31(srlout_3[i])
