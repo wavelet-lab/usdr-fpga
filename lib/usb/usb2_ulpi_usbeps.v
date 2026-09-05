@@ -2,7 +2,8 @@ module usb2_ulpi_usbeps #(
     parameter AUX_BUS_RX = 1,
     parameter AUX_BUS_TX = 1,
     parameter USDR_PID = 0,
-    parameter ULTRA_SCALE = 0
+    parameter ULTRA_SCALE = 0,
+    parameter DEBUG = 0
 ) (
     //ULPI ports
     input            phy_rst,
@@ -50,13 +51,21 @@ module usb2_ulpi_usbeps #(
 
 // Output 32 bit streams are in little-endian format (both TX & RX)
 //
-wire usb_phy_reset;
+wire usb_phy_reset_p;
 wire async_reset;
-synchronizer  #(.INIT(1), .ASYNC_RESET(1))  reset_phy_to_sys(.clk(clk), .rst(phy_rst), .a_in(usb_phy_reset /*1'b0*/), .s_out(async_reset));
+
+reg usb_phy_reset;
+always @(posedge phy_clk) begin
+    usb_phy_reset <= usb_phy_reset_p | phy_rst;
+end
+
+//synchronizer  #(.INIT(1), .ASYNC_RESET(0))  reset_phy_to_sys(.clk(clk), .rst(phy_rst), .a_in(usb_phy_reset /*1'b0*/), .s_out(async_reset));
+synchronizer  #(.INIT(1), .ASYNC_RESET(0))  reset_phy_to_sys(.clk(clk), .rst(1'b0), .a_in(usb_phy_reset), .s_out(async_reset));
 
 wire usb_phy_ready;
 wire async_usb_reset;
-synchronizer  #(.INIT(1), .ASYNC_RESET(1))  resetusb_phy_to_sys(.clk(clk), .rst(usb_phy_ready), .a_in(1'b0), .s_out(async_usb_reset));
+synchronizer  #(.INIT(1), .ASYNC_RESET(0))  resetusb_phy_to_sys(.clk(clk), .rst(usb_phy_ready), .a_in(1'b0), .s_out(async_usb_reset));
+
 
 
 localparam EP_WIDTH = 5;
@@ -119,7 +128,7 @@ usb2_phy_chirp #(.NO_ADDR_CHECK(0)) usb2_phy_chirp(
     // Status
     .stat_usb_hs(cfg_usb_highspeed),        // Entered HS mode succesfully
     .stat_phy_ready(usb_phy_ready),      // All initializations are done, phy is ready
-    .stat_usb_reset(usb_phy_reset),
+    .stat_usb_reset(usb_phy_reset_p),
 
     .host_disconnected(host_disconnected),
 
@@ -484,6 +493,42 @@ usb_fe_axis_rx #(.AUX_BUS_RX(AUX_BUS_RX), .ULTRA_SCALE(ULTRA_SCALE)) usb_fe_axis
 
 assign usb2_stat[19:0]  = usb2_tran_if_debug;
 assign usb2_stat[31:20] = { host_disconnected, 1'b0, usb2_phy_chirp_debug};
+
+
+wire [9:0]  usb2_stat2_setup_cnt = usb2_stat2[9:0];
+wire [9:0]  usb2_stat2_data_cnt  = usb2_stat2[19:10];
+wire [9:0]  usb2_stat2_in_cnt    = usb2_stat2[29:20];
+wire [2:0] usb2_tran_if_ctrlstat   = usb2_tran_if_debug[2:0];
+wire [3:0] usb2_tran_if_act_state  = usb2_tran_if_debug[6:3];
+wire [1:0] usb2_tran_if_tran_state = usb2_tran_if_debug[8:7];
+wire [10:0]usb2_tran_if_seen_reg   = usb2_tran_if_debug[19:9];
+
+//                                 11,     2,   4,         3,
+//assign debug_state = { seen_reg[10:0], tran_state, act_state, ctrlstat };
+generate
+if (DEBUG) begin
+vio_1 vio_1(
+    .clk(phy_clk),
+    .probe_in0(usb2_phy_chirp_debug), // 10
+    .probe_in1(usb_phy_ready),
+    .probe_in2(cfg_usb_highspeed),
+    .probe_in3(usb_phy_reset_p),
+    .probe_in4(usb_phy_reset),    
+    .probe_in5(host_disconnected),
+    .probe_in6(self_usb_addr),          // 7
+    .probe_in7(usb2_stat2_setup_cnt),   // 10
+    
+    .probe_in8(usb2_stat2_data_cnt),       // 10
+    .probe_in9(usb2_stat2_in_cnt),         // 10
+    .probe_in10(usb2_tran_if_ctrlstat),    // 3
+    .probe_in11(usb2_tran_if_act_state),   // 4
+    .probe_in12(usb2_tran_if_tran_state),  // 2    
+    .probe_in13(usb2_tran_if_seen_reg),     // 11
+    .probe_in14(phy_rst),
+    .probe_in15(async_reset)
+);
+end
+endgenerate
 
 
 endmodule

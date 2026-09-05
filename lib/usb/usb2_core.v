@@ -76,7 +76,10 @@ module usb2_core #(
     input [3:0]                             s_axis_usbtx_tkeep,
 
     // AUX signal
-    output          usb_bus_reset
+    output          usb_bus_reset,
+    
+    output [31:0]   usb_debug_p0,
+    output [31:0]   usb_debug_p1
 );
 
 `include "axi_helpers.vh"
@@ -251,8 +254,8 @@ usb2_ulpi_usbeps  #(
 
     .cfg_usb2_en(1'b1),
 
-    .usb2_stat(),
-    .usb2_stat2(),
+    .usb2_stat(usb_debug_p0),
+    .usb2_stat2(usb_debug_p1),
     .usb_bus_reset(usb_bus_reset),
 
     .clk(clk),

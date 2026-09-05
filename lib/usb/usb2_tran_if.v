@@ -1153,7 +1153,7 @@ always @(posedge clk) begin
     end
 end
 
-//2, 4, 3
+//                                 11,     2,   4,         3,
 assign debug_state = { seen_reg[10:0], tran_state, act_state, ctrlstat };
 assign debug2      = { in_cnt, data_cnt, setup_cnt };
 
