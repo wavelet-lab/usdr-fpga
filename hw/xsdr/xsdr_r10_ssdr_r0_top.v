@@ -6,7 +6,7 @@
 module xsdr_r10_ssdr_r0_top #(
     parameter [7:0] DEVICE_ID = 8'h30,
     parameter [7:0] DEVICE_REVISION = 1,
-    parameter [0:0] STARTUP_DEBUG = 0
+    parameter [0:0] STARTUP_DEBUG = 1
 )(
   output  [1:0] pci_exp_txp,
   output  [1:0] pci_exp_txn,

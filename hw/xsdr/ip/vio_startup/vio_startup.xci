@@ -1577,7 +1577,7 @@
         "ARCHITECTURE": [ { "value": "artix7" } ],
         "BASE_BOARD_PART": [ { "value": "" } ],
         "BOARD_CONNECTIONS": [ { "value": "" } ],
-        "DEVICE": [ { "value": "xc7a35t" } ],
+        "DEVICE": [ { "value": "xc7a50t" } ],
         "PACKAGE": [ { "value": "cpg236" } ],
         "PREFHDL": [ { "value": "VERILOG" } ],
         "SILICON_REVISION": [ { "value": "" } ],

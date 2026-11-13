@@ -66,6 +66,8 @@ import_ip $origin_dir/ip/blk_mem_gen_nrx_128_64/blk_mem_gen_nrx_128_64.xci -quie
 import_ip $origin_dir/ip/blk_mem_gen_ntx_128_64_2/blk_mem_gen_ntx_128_64_2.xci -quiet
 import_ip $origin_dir/ip/xfft_0/xfft_0.xci -quiet
 import_ip $origin_dir/ip/vio_0/vio_0.xci -quiet
+import_ip $origin_dir/ip/vio_4/vio_4.xci -quiet
+import_ip $origin_dir/ip/vio_startup/vio_startup.xci -quiet
 import_ip $origin_dir/ip/$pcie_core/${pcie_core}.xci -quiet
 
 upgrade_ip [get_ips blk_mem_gen_nrx]
@@ -75,7 +77,9 @@ upgrade_ip [get_ips blk_mem_gen_nrx_128_64]
 upgrade_ip [get_ips blk_mem_gen_ntx_128_64_2]
 upgrade_ip [get_ips $pcie_core]
 upgrade_ip [get_ips xfft_0]
+upgrade_ip [get_ips vio_4]
 upgrade_ip [get_ips vio_0]
+upgrade_ip [get_ips vio_startup]
 set obj [get_filesets constrs_1]
 
 set xdc_files [list \
