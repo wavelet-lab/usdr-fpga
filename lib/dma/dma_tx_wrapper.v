@@ -276,6 +276,26 @@ wire                                       rc_valid;
 wire                                       rc_ready;
 wire  [RAM_ADDR_WIDTH:8]                   rc_fifomin;
 
+wire                                      tcq_cvalid;
+wire                                      tcq_cready;
+wire [PCIE_TAG_BITS-1:0]                  tcq_ctag;
+
+axis_fifo #(.DEEP(16), .WIDTH(PCIE_TAG_BITS), .EXTRA_REG(1'b1)) tag_nodelay_fifo (
+    .clk(clk),
+    .rst(rst),
+
+    .s_rx_tdata(m_tcq_ctag),
+    .s_rx_tvalid(m_tcq_cvalid),
+    .s_rx_tready(m_tcq_cready),
+
+    .m_tx_tdata(tcq_ctag),
+    .m_tx_tvalid(tcq_cvalid),
+    .m_tx_tready(tcq_cready),
+
+    .fifo_full(),
+    .fifo_used()
+);
+
 dma_tx_pcie #(
     .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
     .BUS_ADDR_WIDTH(BUS_ADDR_WIDTH),
@@ -318,10 +338,11 @@ dma_tx_pcie #(
     .m_tcq_tag(m_tcq_tag),
 
     // Request termination, s_tcq_ctag can be reused
-    .m_tcq_cvalid(m_tcq_cvalid),
-    .m_tcq_cready(m_tcq_cready),
-    .m_tcq_ctag(m_tcq_ctag)
+    .m_tcq_cvalid(tcq_cvalid),
+    .m_tcq_cready(tcq_cready),
+    .m_tcq_ctag(tcq_ctag)
 );
+
 
 wire [31:0]  m_dma_stat_data;
 wire [31:0]  m_dma_tsl_data;
