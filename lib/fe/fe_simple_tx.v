@@ -7,12 +7,12 @@
 module fe_simple_tx #(
     parameter TIMESTAMP_BITS = 48,
     parameter RAM_ADDR_WIDTH = 18,
-    parameter DESCR_DATA_BITS = 3,
+    parameter DESCR_DATA_BITS = 3,         // Bits in descriptor
     parameter DATA_BITS = 3,
-    parameter DATA_WIDTH = 8 << DATA_BITS,
+    parameter DATA_WIDTH = 8 << DATA_BITS, // Bits on FE side of FIFO
     parameter FE_IDX_BITS = 5,
     parameter SAMPLES_WIDTH = RAM_ADDR_WIDTH - 1,
-    parameter FE_DESCR_WIDTH = TIMESTAMP_BITS + SAMPLES_WIDTH + (RAM_ADDR_WIDTH - DATA_BITS),
+    parameter FE_DESCR_WIDTH = TIMESTAMP_BITS + SAMPLES_WIDTH + (RAM_ADDR_WIDTH - DESCR_DATA_BITS),
     parameter FRAME_LENGTH = 32, //Extra samples to flush beforehand to compensate distribution delay through extra pipeline stages
     parameter RAM_CHECK_BIT = 8,
     parameter SAMPLES_CHECK_BITS = (DATA_BITS - 1),
@@ -26,7 +26,8 @@ module fe_simple_tx #(
     parameter TX_OLD_FLAGS     = 1'b1,
     parameter ULTRA_SCALE      = 1'b0,
     parameter RAW_CHANS        = 4,
-    parameter DAC_CMD_WIDTH    = 1
+    parameter DAC_CMD_WIDTH    = 1,
+    parameter [0:0] DEBUG         = 1'b0
 )(
     input clk,
     input rst,
@@ -192,14 +193,19 @@ end
 
 ////////////////////////////////////////////////////////////////////////////////
 localparam FE_BYTES_OFF   = 0;
-localparam FE_SAMPLES_OFF = FE_BYTES_OFF    + (RAM_ADDR_WIDTH - DATA_BITS);
+localparam FE_SAMPLES_OFF = FE_BYTES_OFF    + (RAM_ADDR_WIDTH - DESCR_DATA_BITS);
 localparam FE_TS_OFF      = FE_SAMPLES_OFF  + SAMPLES_WIDTH;
 
 
-wire [TIMESTAMP_BITS-1:0]         descriptor_data_ts      = s_descr_data[FE_DESCR_WIDTH - 1:FE_TS_OFF];
-wire [SAMPLES_WIDTH-1:0]          descriptor_data_samples = s_descr_data[FE_TS_OFF - 1     :FE_SAMPLES_OFF];
-wire [RAM_ADDR_WIDTH-1:DATA_BITS] descriptor_data_bytes   = s_descr_data[FE_SAMPLES_OFF - 1:FE_BYTES_OFF];
+wire [TIMESTAMP_BITS-1:0]               descriptor_data_ts         = s_descr_data[FE_DESCR_WIDTH - 1:FE_TS_OFF];
+wire [SAMPLES_WIDTH-1:0]                descriptor_data_samples    = s_descr_data[FE_TS_OFF - 1     :FE_SAMPLES_OFF];
+wire [RAM_ADDR_WIDTH-1:0]               descriptor_data_bytes_raw;
+assign descriptor_data_bytes_raw[RAM_ADDR_WIDTH-1:DESCR_DATA_BITS] = s_descr_data[FE_SAMPLES_OFF - 1:FE_BYTES_OFF];
+assign descriptor_data_bytes_raw[DESCR_DATA_BITS-1:0]              = {DESCR_DATA_BITS{1'b1}};
 
+wire [RAM_ADDR_WIDTH-1:DATA_BITS]       descriptor_data_bytes      = descriptor_data_bytes_raw[RAM_ADDR_WIDTH-1:DATA_BITS];
+
+ 
 reg                               descriptor_data_ts_reg_v;
 wire                              descriptor_valid        = descriptor_data_ts_reg_v; //s_descr_valid;
 
@@ -413,5 +419,50 @@ assign m_fifo_rready   = dac_ready && (burst_samples_boundary || (
 assign m_fifo_araddr = m_fifo_araddr_e;
 assign data_format   = cfg_format;
 assign sig_underrun  = underrung_sig;
+
+generate
+if (DEBUG) begin
+ila_10 ila_10(
+    .clk(clk),
+    .probe0(ram_addr_rst),
+    .probe1(underrung_sig),
+    .probe2(descriptor_valid),
+    .probe3(descriptor_ready),
+    .probe4(m_fifo_arvalid),
+    .probe5(m_fifo_arready),
+    .probe6(m_fifo_rvalid),
+    .probe7(m_fifo_rready),
+    .probe8(m_fifo_rid),
+    .probe9(time_check_valid),
+    .probe10(m_proc_idx_valid_clk),
+    .probe11(s_descr_valid),
+    .probe12(time_check),
+    .probe13(fifo_ar_sop),
+    .probe14(time_check_trigger),
+    .probe15(time_check_late)
+);
+    
+
+vio_10 vio_10(
+    .clk(clk),
+    .probe_in0(ram_addr_rst),
+    .probe_in1(state),
+    .probe_in2(data_format), //2
+    .probe_in3(data_state),  //2
+    .probe_in4(dac_ready),
+    .probe_in5(dac_sync),
+    .probe_in6(descriptor_ready),
+    .probe_in7(descriptor_valid),
+    .probe_in8(m_fifo_addr_changed_rdy),
+    .probe_in9(dac_valid),
+    .probe_in10(tx_timer),
+    .probe_in11(underruns),
+    .probe_in12(timestamp_diff),
+    .probe_in13(m_fifo_arbytes_rem),
+    .probe_in14(m_proc_idx_ready_clk),
+    .probe_in15(m_fifo_araddr_e)
+);
+end
+endgenerate
 
 endmodule
